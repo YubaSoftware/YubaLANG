@@ -24,9 +24,46 @@ class ExpressionTests(unittest.TestCase):
             evaluate_expression("1 and true", runtime)
 
     def test_only_supported_expression_syntax_is_accepted(self):
-        for source in ("f()", "[x for x in values]", "1 if true else 0", "x.y"):
+        for source in ("f()", "1 if true else 0", "x.y"):
             with self.subTest(source=source), self.assertRaises(SyntaxError):
                 parse_expression(source)
+
+    def test_f_strings_and_list_comprehensions(self):
+        runtime = Runtime()
+        runtime.define_var("name", "string", "Terps")
+        runtime.define_var("numbers", "list", [1, 2, 3, 4])
+        runtime.define_var("count", "int", 7)
+        self.assertEqual(
+            evaluate_expression('f"Hello, {name}!"', runtime),
+            "Hello, Terps!",
+        )
+        self.assertEqual(
+            evaluate_expression('f"{name!r}: {count:02d}"', runtime),
+            "'Terps': 07",
+        )
+        self.assertEqual(
+            evaluate_expression("[number * number for number in range(5)]", runtime),
+            [0, 1, 4, 9, 16],
+        )
+        self.assertEqual(
+            evaluate_expression(
+                "[number for number in numbers if number % 2 == 0]", runtime
+            ),
+            [2, 4],
+        )
+        self.assertIsNone(runtime.get_var("number"))
+
+    def test_f_strings_and_comprehensions_work_in_programs(self):
+        output = io.StringIO()
+        source = [
+            'define var name: string = "Terps"',
+            "define var squares: list[int] = [x * x for x in range(4)]",
+            'text output f"Hello, {name}!"',
+            "text output squares",
+        ]
+        with contextlib.redirect_stdout(output):
+            execute_lines(source, source_name="expressions.yl")
+        self.assertEqual(output.getvalue(), "Hello, Terps!\n[0, 1, 4, 9]\n")
 
     def test_command_parser_keeps_source_locations(self):
         nodes = parse_program(
@@ -86,6 +123,8 @@ class ExpressionTests(unittest.TestCase):
             analyze_document(
                 "define var value: int = 0\n"
                 "set value = (2 + 3) * 4\n"
+                "define var squares: list[int] = [x * x for x in range(5)]\n"
+                'define var greeting: string = f"Value: {value}"\n'
                 "if value >= 20 and not false\n"
                 "    text output value\n"
                 "endif\n"

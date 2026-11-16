@@ -48,6 +48,11 @@ raises an error when the iterator is exhausted and no default is supplied.
 `enumerate` produces `(index, value)` tuples; `zip` produces tuples. `sorted`
 accepts `true` or `false` for its optional `reverse` argument.
 
+`slice` follows Python's sequence-slicing convention: `start` is included and
+`stop` is excluded. For example, slicing `[0, 1, 2, 3]` from `1` to `3`
+returns `[1, 2]`. To produce the integer sequence `1, 2, 3`, use
+`range 1 4 destination` because `range` also excludes its stop value.
+
 Lists also support `list get <list> <index> <destination>` and
 `list set <list> <index> <value>`. Tuple reads use
 `tuple get <tuple> <index> <destination>`. Indexes support Python-style

@@ -70,8 +70,17 @@ def parse_value(value: str, expected_type: str, runtime: Runtime) -> Any:
         raise ValueError("Expected 'none'.")
 
     if expected_type == "string":
-        if quoted:
-            return _literal(value, runtime)
+        formatted = (
+            len(value) >= 3
+            and value[0] in "fF"
+            and value[1] in ("'", '"')
+            and value[-1] == value[1]
+        )
+        if quoted or formatted:
+            result = _literal(value, runtime)
+            if not isinstance(result, str):
+                raise TypeError("Expected a string value.")
+            return result
         if data is not None and isinstance(data["value"], str):
             return data["value"]
         raise ValueError("Expected a quoted string or string variable.")

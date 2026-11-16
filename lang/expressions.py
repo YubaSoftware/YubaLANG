@@ -77,6 +77,8 @@ def parse_expression(source: str) -> ast.expr:
         raise SyntaxError(f"Invalid expression: {error.msg}.") from error
     allowed = (
         ast.Constant, ast.Name, ast.List, ast.Tuple, ast.Set, ast.Dict,
+        ast.JoinedStr, ast.FormattedValue, ast.ListComp, ast.comprehension,
+        ast.Store,
         ast.UnaryOp, ast.UAdd, ast.USub, ast.Not, ast.BinOp,
         ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
         ast.BoolOp, ast.And, ast.Or, ast.Compare, ast.Eq, ast.NotEq,
@@ -87,10 +89,24 @@ def parse_expression(source: str) -> ast.expr:
             if not (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "set"
-                and not node.args and not node.keywords
+                and (
+                    (node.func.id == "set" and not node.args and not node.keywords)
+                    or (
+                        node.func.id == "range"
+                        and 1 <= len(node.args) <= 3
+                        and not node.keywords
+                    )
+                )
             ):
                 raise SyntaxError("Unsupported syntax in expression.")
+        if isinstance(node, ast.ListComp) and (
+            len(node.generators) != 1
+            or not isinstance(node.generators[0].target, ast.Name)
+            or node.generators[0].is_async
+        ):
+            raise SyntaxError(
+                "List comprehensions require one synchronous identifier target."
+            )
     return expression
 
 
@@ -101,34 +117,80 @@ def _number(value: Any) -> bool:
 def evaluate_expression(source: str, runtime: Runtime) -> Any:
     expression = parse_expression(source)
 
-    def evaluate(node: ast.expr) -> Any:
+    def evaluate(
+        node: ast.expr, local_values: dict[str, Any] | None = None
+    ) -> Any:
         if isinstance(node, ast.Constant):
             if isinstance(node.value, (str, int, float, bool, type(None))):
                 return node.value
             raise SyntaxError("Unsupported literal in expression.")
         if isinstance(node, ast.Name):
+            if local_values is not None and node.id in local_values:
+                return local_values[node.id]
             variable = runtime.get_var(node.id)
             if variable is None:
                 raise ValueError(f"Variable '{node.id}' is not defined.")
             return variable["value"]
         if isinstance(node, ast.List):
-            return [evaluate(item) for item in node.elts]
+            return [evaluate(item, local_values) for item in node.elts]
         if isinstance(node, ast.Tuple):
-            return tuple(evaluate(item) for item in node.elts)
+            return tuple(evaluate(item, local_values) for item in node.elts)
         if isinstance(node, ast.Set):
-            return {evaluate(item) for item in node.elts}
+            return {evaluate(item, local_values) for item in node.elts}
         if isinstance(node, ast.Dict):
             return {
-                evaluate(key): evaluate(value)
+                evaluate(key, local_values): evaluate(value, local_values)
                 for key, value in zip(node.keys, node.values)
             }
+        if isinstance(node, ast.JoinedStr):
+            return "".join(str(evaluate(value, local_values)) for value in node.values)
+        if isinstance(node, ast.FormattedValue):
+            value = evaluate(node.value, local_values)
+            if node.conversion == ord("s"):
+                value = str(value)
+            elif node.conversion == ord("r"):
+                value = repr(value)
+            elif node.conversion == ord("a"):
+                value = ascii(value)
+            elif node.conversion != -1:
+                raise SyntaxError("Unsupported conversion in f-string.")
+            format_spec = (
+                evaluate(node.format_spec, local_values)
+                if node.format_spec is not None else ""
+            )
+            return format(value, format_spec)
+        if isinstance(node, ast.ListComp):
+            generator = node.generators[0]
+            iterable = evaluate(generator.iter, local_values)
+            result = []
+            for value in iterable:
+                comprehension_values = dict(local_values or ())
+                comprehension_values[generator.target.id] = value
+                include_value = True
+                for condition in generator.ifs:
+                    condition_value = evaluate(condition, comprehension_values)
+                    if not isinstance(condition_value, bool):
+                        raise TypeError(
+                            "List comprehension conditions must evaluate to booleans."
+                        )
+                    if not condition_value:
+                        include_value = False
+                        break
+                if include_value:
+                    result.append(evaluate(node.elt, comprehension_values))
+            return result
         if (
             isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == "set" and not node.args and not node.keywords
         ):
             return set()
+        if (
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "range"
+        ):
+            return range(*(evaluate(argument, local_values) for argument in node.args))
         if isinstance(node, ast.UnaryOp):
-            value = evaluate(node.operand)
+            value = evaluate(node.operand, local_values)
             if isinstance(node.op, ast.UAdd) and _number(value):
                 return value
             if isinstance(node.op, ast.USub) and _number(value):
@@ -138,7 +200,8 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
             raise TypeError("Unary operators require a number or boolean.")
         if isinstance(node, ast.BinOp):
             operation = _OPERATORS.get(type(node.op))
-            left, right = evaluate(node.left), evaluate(node.right)
+            left = evaluate(node.left, local_values)
+            right = evaluate(node.right, local_values)
             if operation is None:
                 raise SyntaxError("Unsupported operator in expression.")
             if not _number(left) or not _number(right):
@@ -150,7 +213,7 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
         if isinstance(node, ast.BoolOp):
             if isinstance(node.op, ast.And):
                 for item in node.values:
-                    value = evaluate(item)
+                    value = evaluate(item, local_values)
                     if not isinstance(value, bool):
                         raise TypeError("Boolean operators require boolean operands.")
                     if not value:
@@ -158,7 +221,7 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 return True
             if isinstance(node.op, ast.Or):
                 for item in node.values:
-                    value = evaluate(item)
+                    value = evaluate(item, local_values)
                     if not isinstance(value, bool):
                         raise TypeError("Boolean operators require boolean operands.")
                     if value:
@@ -166,9 +229,9 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 return False
             raise SyntaxError("Unsupported boolean operator in expression.")
         if isinstance(node, ast.Compare):
-            left = evaluate(node.left)
+            left = evaluate(node.left, local_values)
             for operation_node, comparator in zip(node.ops, node.comparators):
-                right = evaluate(comparator)
+                right = evaluate(comparator, local_values)
                 operation = _COMPARISONS.get(type(operation_node))
                 if operation is None:
                     raise SyntaxError("Unsupported comparison in expression.")

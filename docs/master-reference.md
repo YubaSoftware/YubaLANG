@@ -86,9 +86,9 @@ numbers, quoted strings, booleans, `none`, and list, dictionary, set, and tuple
 literals. A literal may contain variable references. Expression-bearing
 commands support parentheses, unary `+`, `-`, and `not`, arithmetic
 `+`, `-`, `*`, `/`, `//`, `%`, and `**`, comparisons, and boolean `and`/`or`
-with defined precedence. Expression syntax does not include arbitrary
-function calls; arithmetic commands such as `arith add` remain available and
-produce output rather than an expression value.
+with defined precedence. F-strings and single-target list comprehensions with
+optional `if` filters are supported. The `range` built-in is available in
+expressions; general function calls remain statement commands.
 
 ## Variables and types
 
@@ -194,9 +194,14 @@ names. Collection literals can refer to existing variables:
 ```hl
 define var first: int = 10
 define var values: list = [first, 20, "thirty"]
+define var squares: list[int] = [x * x for x in range(10)]
+define var greeting: string = f"Hello, {first}!"
 ```
 
-Strings are quoted. `if`, `elseif`, and `loop while` require boolean
+List comprehensions support one identifier target and optional boolean
+conditions. F-strings support expression fields and Python-style conversions
+and format specifications. `range` accepts one to three integer arguments and
+excludes its stop value. `if`, `elseif`, and `loop while` require boolean
 conditions. `compare <expression> <bool-destination>` stores a comparison
 result; the legacy four-operand comparison form is also supported.
 
@@ -258,7 +263,7 @@ accept two operands. Division and modulo by zero are runtime errors.
 | `range <stop> <list-destination>` | Produce integers from zero to `stop` (exclusive). |
 | `range <start> <stop> <list-destination> [step]` | Produce an integer range. |
 | `reversed <iterable> <list-destination>` | Return values in reverse order. |
-| `slice <sequence> <start> <stop> <destination> [step]` | Slice a supported sequence. |
+| `slice <sequence> <start> <stop> <destination> [step]` | Slice a supported sequence with an inclusive start and exclusive stop, like Python. |
 | `sorted <iterable> <list-destination> [reverse]` | Return sorted values; `reverse` is boolean. |
 | `zip <iterable1> <iterable2> [...] <list-destination>` | Pair values into tuples, stopping at the shortest input. |
 
@@ -618,10 +623,10 @@ trusted libraries. See the [C ABI guide](features/c-abi.md).
   collection literals and collection-producing built-ins create a new outer
   container without deep-copying its elements, so a tuple may contain shared
   mutable values.
-- Expressions are intentionally limited to value expressions, arithmetic,
-  comparisons, and boolean operators; function calls are statement commands.
-  Static inference is conservative, and dynamic values may evade static
-  diagnostics while remaining subject to runtime checks.
+- Function calls in expressions remain limited to `range`; other function
+  calls are statement commands. Static inference is conservative, and dynamic
+  values may evade static diagnostics while remaining subject to runtime
+  checks.
 - There is no bytecode compiler, project build command, interactive debugger
   frontend, coverage instrumentation, or filesystem-wide LSP index.
 - The runtime has no general deterministic resource protocol for iterators or

@@ -15,6 +15,7 @@ from .packages import PackageError, find_project_root
 from .runtime import Runtime, TYPES
 from .standard_library import is_standard_module
 from .typecheck import check_types
+from .type_system import is_known_type, parse_type
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
@@ -141,7 +142,7 @@ _HOVER: dict[str, str] = {
     "reversed": "**`reversed <iterable> <list_destination>`** stores values in reverse order.",
     "slice": (
         "**`slice <sequence> <start> <stop> <destination> [step]`** selects "
-        "a sequence slice."
+        "a sequence slice; start is included and stop is excluded."
     ),
     "sorted": "**`sorted <iterable> <list_destination> [reverse]`** sorts an iterable.",
     "type": "**`type <variable> <string_destination>`** stores the declared type.",
@@ -338,9 +339,16 @@ def analyze_document(source: str) -> list[dict[str, Any]]:
                 error = "Usage: define var <name>: <type> = <value>"
             elif not parts[2][:-1].isidentifier():
                 error = "Variable name must be an identifier."
-            elif parts[3] not in TYPES and parts[3] not in record_types:
-                code = "unknown-type"
-                error = f"Unknown type: {parts[3]}"
+            else:
+                try:
+                    value_type = parse_type(" ".join(parts[3:parts.index("=")]))
+                except ValueError:
+                    value_type = None
+                if value_type is None or not is_known_type(
+                    value_type, set(record_types)
+                ):
+                    code = "unknown-type"
+                    error = f"Unknown type: {' '.join(parts[3:parts.index('=')])}"
         elif command == "compare":
             if len(parts) < 4:
                 error = "Usage: compare <expression> <bool_variable>"

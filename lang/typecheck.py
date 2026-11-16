@@ -134,12 +134,16 @@ def _expression_type(
     def infer(node: ast.expr) -> str | None:
         if isinstance(node, ast.Constant):
             return _python_type(node.value)
+        if isinstance(node, ast.JoinedStr):
+            return "string"
         if isinstance(node, ast.Name):
             return variables.get(node.id) or (functions or {}).get(node.id)
         if isinstance(node, ast.List):
             item_types = [infer(item) for item in node.elts]
             merged = _merge_types([item for item in item_types if item])
             return f"list[{merged}]" if merged else "list"
+        if isinstance(node, ast.ListComp):
+            return "list"
         if isinstance(node, ast.Set):
             item_types = [infer(item) for item in node.elts]
             merged = _merge_types([item for item in item_types if item])

@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import collections as _collections
 import csv
 import datetime as datetime_module
 import hashlib
@@ -10,7 +11,10 @@ import json
 import math
 import os
 import random
+import re
+import sqlite3
 import subprocess
+import sys as _sys
 import tempfile
 import threading
 import time
@@ -35,12 +39,50 @@ STANDARD_MODULES = frozenset(
         "std.csv",
         "std.url",
         "std.hash",
+        "std.pathlib",
+        "std.re",
+        "std.os",
+        "std.statistics",
+        "std.sqlite",
+        "std.collections",
+        "std.sys",
+        "math",
+        "random",
+        "datetime",
+        "json",
+        "pathlib",
+        "re",
+        "os",
+        "hashlib",
+        "base64",
+        "subprocess",
+        "statistics",
+        "sqlite",
+        "collections",
+        "sys",
     }
 )
+STANDARD_MODULE_ALIASES = {
+    "math": "math",
+    "random": "random",
+    "datetime": "datetime",
+    "json": "json",
+    "pathlib": "pathlib",
+    "re": "re",
+    "os": "os",
+    "hashlib": "hashlib",
+    "base64": "base64",
+    "subprocess": "subprocess",
+    "csv": "csv",
+    "statistics": "statistics",
+    "sqlite": "sqlite",
+    "collections": "collections",
+    "sys": "sys",
+}
 
 
 def is_standard_module(name: str) -> bool:
-    return name in STANDARD_MODULES
+    return name in STANDARD_MODULES or name in STANDARD_MODULE_ALIASES
 
 
 def _string(value: Any, label: str) -> str:
@@ -270,7 +312,43 @@ def _random_functions(source: random.Random) -> dict[str, Callable[..., Any]]:
             raise ValueError("choice() requires a non-empty list, tuple, or string.")
         return source.choice(values)
 
-    return {"seed": seed, "integer": integer, "uniform": uniform, "choice": choice}
+    def random() -> float:
+        return source.random()
+
+    def randint(start: int, stop: int) -> int:
+        if isinstance(start, bool) or not isinstance(start, int):
+            raise TypeError("Start must be an integer.")
+        if isinstance(stop, bool) or not isinstance(stop, int):
+            raise TypeError("Stop must be an integer.")
+        if start > stop:
+            raise ValueError("Start must not exceed stop.")
+        return source.randint(start, stop)
+
+    def shuffle(values: list[Any]) -> list[Any]:
+        if not isinstance(values, list):
+            raise TypeError("shuffle() requires a list.")
+        source.shuffle(values)
+        return values
+
+    def sample(values: list[Any], count: int) -> list[Any]:
+        if not isinstance(values, list):
+            raise TypeError("sample() requires a list.")
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise TypeError("Count must be an integer.")
+        if not 0 <= count <= len(values):
+            raise ValueError("Sample count is out of range.")
+        return source.sample(values, count)
+
+    return {
+        "seed": seed,
+        "integer": integer,
+        "uniform": uniform,
+        "choice": choice,
+        "random": random,
+        "randint": randint,
+        "shuffle": shuffle,
+        "sample": sample,
+    }
 
 
 def _math_functions() -> dict[str, Callable[..., Any]]:
@@ -290,6 +368,21 @@ def _math_functions() -> dict[str, Callable[..., Any]]:
             raise TypeError("Argument must be a number.")
         return math.isfinite(value)
 
+    def tan(value: Any) -> float:
+        return math.tan(_number(value, "Argument"))
+
+    def log(value: Any, base: Any | None = None) -> float:
+        number = _number(value, "Argument")
+        if base is None:
+            return math.log(number)
+        base_value = _number(base, "Base")
+        if base_value <= 0 or base_value == 1:
+            raise ValueError("Log base must be > 0 and not equal to 1.")
+        return math.log(number, base_value)
+
+    def log10(value: Any) -> float:
+        return math.log10(_number(value, "Argument"))
+
     return {
         "abs": numeric(abs),
         "ceil": numeric(math.ceil),
@@ -298,9 +391,13 @@ def _math_functions() -> dict[str, Callable[..., Any]]:
         "pow": power,
         "sin": numeric(math.sin),
         "cos": numeric(math.cos),
+        "tan": tan,
         "is_finite": is_finite,
+        "log": log,
+        "log10": log10,
         "pi": lambda: math.pi,
         "e": lambda: math.e,
+        "tau": lambda: math.tau,
     }
 
 
@@ -329,7 +426,24 @@ def _json_functions() -> dict[str, Callable[..., Any]]:
             sort_keys=sort_keys,
         )
 
-    return {"loads": loads, "dumps": dumps}
+    def load(path: str) -> Any:
+        with Path(_string(path, "Path")).open("r", encoding="utf-8") as source:
+            return json.load(source, parse_constant=reject_constant)
+
+    def dump(value: Any, path: str, indent: int | None = None, sort_keys: bool = False) -> None:
+        target = Path(_string(path, "Path"))
+        with target.open("w", encoding="utf-8") as output:
+            json.dump(
+                value,
+                output,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=indent,
+                sort_keys=sort_keys,
+            )
+        return None
+
+    return {"loads": loads, "dumps": dumps, "load": load, "dump": dump}
 
 
 def _encoding_functions() -> dict[str, Callable[..., Any]]:
@@ -496,6 +610,184 @@ def _hash_functions() -> dict[str, Callable[..., Any]]:
         return digest.hexdigest()
 
     return {"sha256": sha256, "sha256_file": sha256_file}
+
+
+def _collections_functions() -> dict[str, Callable[..., Any]]:
+    def counter(values: Any) -> Any:
+        return _collections.Counter(values)
+
+    def deque(values: Any = None, maxlen: int | None = None) -> Any:
+        if values is None:
+            values = ()
+        if maxlen is not None and (isinstance(maxlen, bool) or not isinstance(maxlen, int)):
+            raise TypeError("maxlen must be an integer or None.")
+        return _collections.deque(values, maxlen=maxlen)
+
+    def defaultdict(default_factory: Any = None) -> Any:
+        if default_factory is None:
+            return _collections.defaultdict()
+        return _collections.defaultdict(default_factory)
+
+    return {"Counter": counter, "deque": deque, "defaultdict": defaultdict}
+
+
+def _sqlite_functions() -> dict[str, Callable[..., Any]]:
+    def connect(path: str, **kwargs: Any) -> sqlite3.Connection:
+        return sqlite3.connect(_string(path, "Database path"), **kwargs)
+
+    return {"connect": connect}
+
+
+def _datetime_functions() -> dict[str, Callable[..., Any]]:
+    def now() -> float:
+        return time.time()
+
+    def today() -> str:
+        return datetime_module.date.today().isoformat()
+
+    def timestamp() -> float:
+        return time.time()
+
+    def format_date(value: Any, pattern: str = "%Y-%m-%d %H:%M:%S") -> str:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            moment = datetime_module.datetime.fromtimestamp(float(value), tz=datetime_module.timezone.utc)
+        elif isinstance(value, str):
+            text = _string(value, "Date")
+            try:
+                moment = datetime_module.datetime.fromisoformat(text)
+            except ValueError as error:
+                raise ValueError(f"Date '{value}' is not ISO-8601 parseable.") from error
+        else:
+            raise TypeError("Date value must be an ISO-8601 string or Unix timestamp.")
+        return moment.strftime(_string(pattern, "Date format"))
+
+    def parse_date(value: str) -> str:
+        text = _string(value, "Date")
+        try:
+            return datetime_module.datetime.fromisoformat(text).isoformat()
+        except ValueError as error:
+            raise ValueError(f"Date '{value}' is not ISO-8601 parseable.") from error
+
+    return {
+        "now": now,
+        "today": today,
+        "timestamp": timestamp,
+        "format_date": format_date,
+        "parse_date": parse_date,
+    }
+
+
+def _pathlib_functions() -> dict[str, Callable[..., Any]]:
+    fs = _filesystem_functions()
+    path = _path_functions()
+
+    def exists(path_value: str) -> bool:
+        return fs["exists"](_string(path_value, "Path"))
+
+    def is_file(path_value: str) -> bool:
+        return fs["is_file"](_string(path_value, "Path"))
+
+    def is_dir(path_value: str) -> bool:
+        return Path(_string(path_value, "Path")).is_dir()
+
+    def mkdir(path_value: str, parents: bool = False, exist_ok: bool = False) -> None:
+        return fs["mkdir"](_string(path_value, "Path"), parents, exist_ok)
+
+    def listdir(path_value: str) -> list[str]:
+        return fs["list_dir"](_string(path_value, "Path"))
+
+    def basename(path_value: str) -> str:
+        return path["basename"](_string(path_value, "Path"))
+
+    def extension(path_value: str) -> str:
+        return path["extension"](_string(path_value, "Path"))
+
+    return {
+        "exists": exists,
+        "is_file": is_file,
+        "is_dir": is_dir,
+        "mkdir": mkdir,
+        "listdir": listdir,
+        "basename": basename,
+        "extension": extension,
+    }
+
+
+def _re_functions() -> dict[str, Callable[..., Any]]:
+    def search(pattern: str, text: str) -> dict[str, Any] | None:
+        match = re.search(_string(pattern, "Pattern"), _string(text, "Text"))
+        if match is None:
+            return None
+        return {"match": match.group(0), "start": match.start(), "end": match.end()}
+
+    def match(pattern: str, text: str) -> dict[str, Any] | None:
+        match = re.match(_string(pattern, "Pattern"), _string(text, "Text"))
+        if match is None:
+            return None
+        return {"match": match.group(0), "start": match.start(), "end": match.end()}
+
+    def findall(pattern: str, text: str) -> list[str]:
+        return re.findall(_string(pattern, "Pattern"), _string(text, "Text"))
+
+    def sub(pattern: str, replacement: str, text: str) -> str:
+        return re.sub(
+            _string(pattern, "Pattern"),
+            _string(replacement, "Replacement"),
+            _string(text, "Text"),
+        )
+
+    return {"search": search, "match": match, "findall": findall, "sub": sub}
+
+
+def _statistics_functions() -> dict[str, Callable[..., Any]]:
+    import statistics as _statistics
+
+    def mean(values: list[float]) -> float:
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("mean() requires a list or tuple.")
+        return _statistics.mean(values)
+
+    def median(values: list[float]) -> float:
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("median() requires a list or tuple.")
+        return _statistics.median(values)
+
+    def mode(values: list[float]) -> float | list[float]:
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("mode() requires a list or tuple.")
+        return _statistics.mode(values)
+
+    def stdev(values: list[float]) -> float:
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("stdev() requires a list or tuple.")
+        return _statistics.stdev(values)
+
+    def variance(values: list[float]) -> float:
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("variance() requires a list or tuple.")
+        return _statistics.variance(values)
+
+    def correlation(left: list[float], right: list[float]) -> float:
+        if not isinstance(left, (list, tuple)) or not isinstance(right, (list, tuple)):
+            raise TypeError("correlation() requires two lists or tuples.")
+        return _statistics.correlation(left, right)
+
+    def percentile(values: list[float], point: float) -> float:
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("percentile() requires a list or tuple.")
+        if isinstance(point, bool) or not isinstance(point, (int, float)):
+            raise TypeError("Point must be numeric.")
+        return _statistics.quantiles(values, n=100, method="linear")[int(point) - 1]
+
+    return {
+        "mean": mean,
+        "median": median,
+        "mode": mode,
+        "stdev": stdev,
+        "variance": variance,
+        "correlation": correlation,
+        "percentile": percentile,
+    }
 
 
 def _process_functions(program_args: list[str]) -> dict[str, Callable[..., Any]]:
@@ -740,6 +1032,23 @@ def standard_module_functions(
     random_source: random.Random,
     program_args: list[str],
 ) -> dict[str, Callable[..., Any]]:
+    canonical_name = {
+        "math": "math",
+        "random": "random",
+        "datetime": "datetime",
+        "json": "json",
+        "pathlib": "pathlib",
+        "re": "re",
+        "os": "os",
+        "hashlib": "hashlib",
+        "base64": "base64",
+        "subprocess": "subprocess",
+        "csv": "csv",
+        "statistics": "statistics",
+        "sqlite": "sqlite",
+        "collections": "collections",
+        "sys": "sys",
+    }.get(name, name)
     modules: dict[str, Callable[[], dict[str, Callable[..., Any]]]] = {
         "std.path": _path_functions,
         "std.fs": _filesystem_functions,
@@ -753,5 +1062,54 @@ def standard_module_functions(
         "std.csv": _csv_functions,
         "std.url": _url_functions,
         "std.hash": _hash_functions,
+        "std.pathlib": _pathlib_functions,
+        "std.re": _re_functions,
+        "std.os": lambda: {
+            "getenv": lambda key, default=None: os.environ.get(_string(key, "Environment variable name"), default),
+            "environ": dict(os.environ),
+            "path": os.path,
+            "listdir": lambda path: sorted(os.listdir(_string(path, "Path"))),
+            "mkdir": lambda path, parents=False: os.makedirs(_string(path, "Path"), exist_ok=parents),
+        },
+        "std.statistics": _statistics_functions,
+        "std.sqlite": _sqlite_functions,
+        "std.collections": _collections_functions,
+        "std.sys": lambda: {
+            "argv": lambda: list(program_args),
+            "platform": _sys.platform,
+            "version": _sys.version,
+            "exit": lambda code=0: (_ for _ in ()).throw(SystemExit(code)),
+        },
+        "math": _math_functions,
+        "random": lambda: _random_functions(random_source),
+        "datetime": _datetime_functions,
+        "json": _json_functions,
+        "pathlib": _pathlib_functions,
+        "re": _re_functions,
+        "os": lambda: {
+            "getenv": lambda key, default=None: os.environ.get(_string(key, "Environment variable name"), default),
+            "environ": dict(os.environ),
+            "path": os.path,
+            "listdir": lambda path: sorted(os.listdir(_string(path, "Path"))),
+            "mkdir": lambda path, parents=False: os.makedirs(_string(path, "Path"), exist_ok=parents),
+        },
+        "hashlib": _hash_functions,
+        "base64": lambda: {
+            "encode": base64.b64encode,
+            "decode": base64.b64decode,
+        },
+        "subprocess": lambda: _process_functions(program_args),
+        "csv": _csv_functions,
+        "statistics": _statistics_functions,
+        "sqlite": _sqlite_functions,
+        "collections": _collections_functions,
+        "sys": lambda: {
+            "argv": lambda: list(program_args),
+            "platform": _sys.platform,
+            "version": _sys.version,
+            "exit": lambda code=0: (_ for _ in ()).throw(SystemExit(code)),
+        },
     }
-    return modules[name]()
+    if canonical_name not in modules:
+        raise KeyError(f"Unknown standard module '{name}'.")
+    return modules[canonical_name]()

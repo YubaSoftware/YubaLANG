@@ -50,6 +50,29 @@ class StandardLibraryTests(unittest.TestCase):
         self.assertEqual(runtime.require_var("round_trip")["value"], "Yuba")
         self.assertTrue(runtime.require_var("is_callable")["value"])
 
+    def test_pythonic_import_aliases_for_common_modules(self):
+        runtime = self.execute(
+            r'''
+            import math
+            import json
+            import pathlib
+            import datetime
+            define var root: float = 0.0
+            define var decoded: dict = {}
+            define var leaf: string = ""
+            define var today: string = ""
+            func call math.sqrt 81 -> root
+            func call json.loads '{"answer": 42}' -> decoded
+            func call pathlib.basename "folder/file.txt" -> leaf
+            func call datetime.today -> today
+            '''
+        )
+
+        self.assertEqual(runtime.require_var("root")["value"], 9.0)
+        self.assertEqual(runtime.require_var("decoded")["value"], {"answer": 42})
+        self.assertEqual(runtime.require_var("leaf")["value"], "file.txt")
+        self.assertRegex(runtime.require_var("today")["value"], r"\d{4}-\d{2}-\d{2}")
+
     def test_json_rejects_nonstandard_numeric_constants(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):

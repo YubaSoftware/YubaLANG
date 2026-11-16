@@ -592,12 +592,15 @@ class BuiltinCommandTests(unittest.TestCase):
             define var descending: list = []
             define var ranged: list = []
             define var sliced: list = []
+            define var slice_source: list = [0, 1, 2, 3]
+            define var python_slice: list = []
             define var paired: list = []
             define var sorted_values: list = []
             enumerate values indexed 4
             reversed values descending
             range 1 6 ranged 2
             slice ranged 1 3 sliced
+            slice slice_source 1 3 python_slice
             sorted values sorted_values
             zip values ranged paired
             """
@@ -606,6 +609,7 @@ class BuiltinCommandTests(unittest.TestCase):
         self.assertEqual(runtime.require_var("descending")["value"], [2, 1, 3])
         self.assertEqual(runtime.require_var("ranged")["value"], [1, 3, 5])
         self.assertEqual(runtime.require_var("sliced")["value"], [3, 5])
+        self.assertEqual(runtime.require_var("python_slice")["value"], [1, 2])
         self.assertEqual(runtime.require_var("sorted_values")["value"], [1, 2, 3])
         self.assertEqual(runtime.require_var("paired")["value"], [(3, 1), (1, 3), (2, 5)])
         self.assertEqual(runtime.require_var("empty")["value"], [])
