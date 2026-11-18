@@ -70,7 +70,7 @@ class CoverageTests(unittest.TestCase):
 
             self.assertEqual(output.getvalue(), "done\n")
             payload = json.loads(coverage_file.read_text(encoding="utf-8"))
-            entries = payload["files"][str(source.resolve())]
+            entries = payload["files"][str(source)]
             self.assertEqual(entries["1"], 1)
             self.assertEqual(entries["3"], 2)
 
@@ -96,7 +96,7 @@ class CoverageTests(unittest.TestCase):
                 run_file(str(source))
             self.assertTrue(coverage_file.is_file())
             self.assertEqual(
-                sorted(read_coverage(coverage_file)[str(source.resolve())]),
+                sorted(read_coverage(coverage_file)[str(source)]),
                 [1, 2],
             )
 
@@ -114,7 +114,7 @@ class CoverageTests(unittest.TestCase):
                 encoding="utf-8",
             )
             summary = summarize_coverage(
-                {str(source.resolve()): {1: 1, 2: 1, 3: 1}},
+                {str(source): {1: 1, 2: 1, 3: 1}},
                 [source],
                 root,
             )

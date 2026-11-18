@@ -806,7 +806,7 @@ class LanguageServer:
                         roots.append(path)
                     break
         self.workspace_roots = [
-            root.resolve() for root in roots if root.is_dir()
+            root.absolute() for root in roots if root.is_dir()
         ]
         self.workspace_cache.clear()
 
@@ -836,14 +836,14 @@ class LanguageServer:
                     continue
                 cached = self.workspace_cache.get(resolved)
                 if cached is not None and cached[0] == stat.st_mtime_ns:
-                    documents[resolved.as_uri()] = cached[1]
+                    documents[candidate.as_uri()] = cached[1]
                     continue
                 try:
                     text = resolved.read_text(encoding="utf-8-sig")
                 except (OSError, UnicodeError):
                     continue
                 self.workspace_cache[resolved] = (stat.st_mtime_ns, text)
-                documents[resolved.as_uri()] = text
+                documents[candidate.as_uri()] = text
         return documents
 
     def _indexed_documents(self) -> dict[str, str]:

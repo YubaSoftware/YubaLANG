@@ -112,7 +112,14 @@ def summarize_coverage(
     root: Path,
 ) -> dict[str, Any]:
     """Build a deterministic report from collected hits and source files."""
-    paths = {str(Path(source_name).resolve()) for source_name in coverage}
+    normalized_coverage: dict[str, dict[int, int]] = {}
+    for source_name, file_hits in coverage.items():
+        path = str(Path(source_name).resolve())
+        normalized_hits = normalized_coverage.setdefault(path, {})
+        for line_number, count in file_hits.items():
+            normalized_hits[line_number] = normalized_hits.get(line_number, 0) + count
+
+    paths = set(normalized_coverage)
     paths.update(str(Path(path).resolve()) for path in source_paths)
 
     files = []
@@ -124,7 +131,7 @@ def summarize_coverage(
         except (OSError, UnicodeError):
             continue
         executable = executable_lines(source)
-        hits = coverage.get(path, {})
+        hits = normalized_coverage.get(path, {})
         uncovered = [line for line in executable if line not in hits]
         covered = len(executable) - len(uncovered)
         total_lines += len(executable)
