@@ -560,6 +560,124 @@ class LanguageServerTests(unittest.TestCase):
         self.assertEqual(stale, [])
         self.assertEqual(server.documents[uri], "text output 4\n")
 
+    def test_workspace_index_resolves_unopened_files_and_invalidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            util = root / "util.yl"
+            util.write_text(
+                "func define remote value:int -> int\n"
+                "    return helper(value)\n"
+                "endfunc\n"
+                "func define unused\n"
+                "endfunc\n",
+                encoding="utf-8",
+            )
+            main = root / "main.yl"
+            main_text = (
+                "func define helper value:int -> int\n"
+                "    return value\n"
+                "endfunc\n"
+                "func call helper 1\n"
+                "func call remote 2\n"
+            )
+            main.write_text(main_text, encoding="utf-8")
+            main_uri = main.as_uri()
+            util_uri = util.as_uri()
+            server = LanguageServer()
+            initialized, _ = server.handle({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"rootUri": root.as_uri()},
+            })
+            self.assertIn("workspace", initialized["result"]["capabilities"])
+            server.handle({
+                "jsonrpc": "2.0", "method": "textDocument/didOpen",
+                "params": {"textDocument": {"uri": main_uri, "text": main_text}},
+            })
+
+            references, _ = server.handle({
+                "jsonrpc": "2.0", "id": 2, "method": "textDocument/references",
+                "params": {
+                    "textDocument": {"uri": main_uri},
+                    "position": {"line": 0, "character": 13},
+                    "context": {"includeDeclaration": True},
+                },
+            })
+            reference_uris = {
+                location["uri"] for location in references["result"]
+            }
+            self.assertEqual(reference_uris, {main_uri, util_uri})
+
+            rename, _ = server.handle({
+                "jsonrpc": "2.0", "id": 3, "method": "textDocument/rename",
+                "params": {
+                    "textDocument": {"uri": main_uri},
+                    "position": {"line": 0, "character": 13},
+                    "newName": "helper_two",
+                },
+            })
+            self.assertEqual(len(rename["result"]["changes"][main_uri]), 2)
+            self.assertEqual(len(rename["result"]["changes"][util_uri]), 1)
+
+            local_rename, _ = server.handle({
+                "jsonrpc": "2.0", "id": 4, "method": "textDocument/rename",
+                "params": {
+                    "textDocument": {"uri": main_uri},
+                    "position": {"line": 0, "character": 19},
+                    "newName": "amount",
+                },
+            })
+            self.assertNotIn(util_uri, local_rename["result"]["changes"])
+
+            definition, _ = server.handle({
+                "jsonrpc": "2.0", "id": 5, "method": "textDocument/definition",
+                "params": {
+                    "textDocument": {"uri": main_uri},
+                    "position": {"line": 4, "character": 11},
+                },
+            })
+            self.assertEqual(definition["result"][0]["uri"], util_uri)
+
+            symbols, _ = server.handle({
+                "jsonrpc": "2.0", "id": 6, "method": "workspace/symbol",
+                "params": {"query": "remote"},
+            })
+            self.assertEqual(symbols["result"][0]["name"], "remote")
+
+            completion, _ = server.handle({
+                "jsonrpc": "2.0", "id": 7, "method": "textDocument/completion",
+                "params": {
+                    "textDocument": {"uri": main_uri},
+                    "position": {"line": 0, "character": 0},
+                },
+            })
+            labels = {item["label"] for item in completion["result"]["items"]}
+            self.assertIn("unused", labels)
+
+            util.write_text(
+                "func define renamed value:int -> int\n"
+                "    return value + 1\n"
+                "endfunc\n",
+                encoding="utf-8",
+            )
+            server.handle({
+                "jsonrpc": "2.0",
+                "method": "workspace/didChangeWatchedFiles",
+                "params": {"changes": [{"uri": util_uri, "type": 2}]},
+            })
+            stale, _ = server.handle({
+                "jsonrpc": "2.0", "id": 8, "method": "workspace/symbol",
+                "params": {"query": "remote"},
+            })
+            self.assertEqual(
+                [symbol for symbol in stale["result"] if symbol["name"] == "remote"],
+                [],
+            )
+            fresh, _ = server.handle({
+                "jsonrpc": "2.0", "id": 9, "method": "workspace/symbol",
+                "params": {"query": "renamed"},
+            })
+            self.assertEqual(fresh["result"][0]["name"], "renamed")
+
     def test_stdio_protocol_initializes_and_exits(self):
         incoming = io.BytesIO(
             _frame({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})

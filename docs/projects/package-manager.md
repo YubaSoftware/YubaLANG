@@ -2,24 +2,24 @@
 
 YubaLANG projects use a dependency-free JSON manifest named `yuba.json` and a
 generated `yuba.lock.json`. Both files should be checked into version control.
-YubaLANG 1.3 accepts manifests targeting runtime 1.2 or 1.3 and reads lockfile
-formats 1, 2, and 3. Format 1 records direct dependencies only; format 2
-records the complete path/Git graph; format 3 adds exact registry releases,
+YubaLANG 1.4 accepts manifests targeting runtime 1.2, 1.3, or 1.4 and reads
+lockfile formats 1, 2, and 3. Format 1 records direct dependencies only; format
+2 records the complete path/Git graph; format 3 adds exact registry releases,
 artifact hashes, and the complete graph. YubaPKG accepts manifests targeting
-runtime 1.2 and 1.3 and writes format 3. The YubaLANG package commands continue
-to install path/Git sources; use YubaPKG to install or update registry
+runtime 1.2 through 1.4 and writes format 3. The YubaLANG package commands
+continue to install path/Git sources; use YubaPKG to install or update registry
 dependencies.
 
 ## Compatibility matrix
 
-This table describes the compatibility contract exercised for the 1.3
+This table describes the compatibility contract exercised for the 1.4
 release and YubaPKG 0.1.0:
 
 | Tool/runtime | Manifest targets accepted | Lock formats read | Format written | Package behavior |
 | --- | --- | --- | --- | --- |
-| YubaLANG 1.3 | 1.2, 1.3 | 1, 2, 3 | 2 for its path/Git commands | Imports installed registry packages from a format-3 graph offline; does not resolve or download them. |
-| YubaPKG 0.1.0 | 1.2, 1.3 | 1, 2, 3 | 3 | Resolves path, Git, and registry dependencies; install upgrades format-1/2 locks. Registry releases must declare support for the requested YubaLANG runtime. |
-| YubaLANG 1.2 | 1.2 | Not guaranteed by this release | Legacy behavior | YubaLANG 1.3 syntax and format-3 registry imports are outside its compatibility contract. |
+| YubaLANG 1.4 | 1.2, 1.3, 1.4 | 1, 2, 3 | 2 for its path/Git commands | Imports installed registry packages from a format-3 graph offline; does not resolve or download them. |
+| YubaPKG 0.1.0 | 1.2, 1.3, 1.4 | 1, 2, 3 | 3 | Resolves path, Git, and registry dependencies; install upgrades format-1/2 locks. Registry releases must declare support for the requested YubaLANG runtime. |
+| YubaLANG 1.2 | 1.2 | Not guaranteed by this release | Legacy behavior | YubaLANG 1.3 and 1.4 syntax and format-3 registry imports are outside its compatibility contract. |
 
 Accepting a manifest version does not make newer language syntax available in
 an older runtime. Package metadata is the registry publisher's compatibility
@@ -47,15 +47,15 @@ manifest has the following fields:
   "name": "sample",
   "version": "0.1.0",
   "entry": "main.yl",
-  "yubalang": "1.3",
+  "yubalang": "1.4",
   "dependencies": {}
 }
 ```
 
 `name`, `version`, `entry`, and `yubalang` are required strings. Dependencies
 are named packages whose source is either a relative path or a Git URL.
-YubaLANG 1.3 accepts manifests targeting versions `1.2` and `1.3`; projects
-initialized by YubaLANG 1.3 target `"yubalang": "1.3"`. The current YubaPKG
+YubaLANG 1.4 accepts manifests targeting versions `1.2`, `1.3`, and `1.4`;
+projects initialized by YubaLANG 1.4 target `"yubalang": "1.4"`. The current YubaPKG
 release also supports both manifest versions.
 
 ```json
@@ -63,7 +63,7 @@ release also supports both manifest versions.
   "name": "sample",
   "version": "0.1.0",
   "entry": "main.yl",
-  "yubalang": "1.3",
+  "yubalang": "1.4",
   "dependencies": {
     "local_math": { "path": "../local_math" },
     "text_utils": { "git": "https://github.com/example/text-utils.git" }
@@ -79,7 +79,7 @@ YubaPKG against the configured trusted registry:
   "name": "sample",
   "version": "0.1.0",
   "entry": "main.yl",
-  "yubalang": "1.3",
+  "yubalang": "1.4",
   "dependencies": {
     "text_utils": { "registry": "^1.2.0" }
   }

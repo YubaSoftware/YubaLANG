@@ -64,8 +64,18 @@ def main() -> None:
         )
         if "1 passed, 0 failed, 0 errored" not in test_output:
             raise RuntimeError(f"Unexpected test-runner output: {test_output}")
+        coverage_output = _run(
+            executable, "test", "--coverage", "tests/cases", cwd=project
+        )
+        if "Coverage:" not in coverage_output:
+            raise RuntimeError(
+                f"Unexpected coverage output: {coverage_output}"
+            )
         _run(executable, "fmt", "--check", str(project), cwd=workspace)
-        print("Standalone initialization, restore, imports, run, test, and format passed.")
+        print(
+            "Standalone initialization, restore, imports, run, test, "
+            "coverage, and format passed."
+        )
 
 
 if __name__ == "__main__":

@@ -97,7 +97,7 @@ text-mode files require a `string` destination, binary-mode files require
 `bytes` or `bytearray`. `file write <file_variable> <value>` writes a string
 to a text file or bytes/bytearray to a binary file. Use
 `close <file_variable>` for deterministic closure; remaining open files are
-also closed when a file run finishes.
+also closed through the runtime resource protocol when a file run finishes.
 
 Commands that write to a destination variable check the result against that
 variable's declared type. An integer result may be widened to a `float`

@@ -9,6 +9,7 @@ from unittest import mock
 
 from lang.interpreter import _split_cached, execute_lines, run_file
 from lang.lsp import analyze_document
+from lang.runtime import Runtime
 from lang.typecheck import check_types
 
 
@@ -254,6 +255,79 @@ class RuntimeDiagnosticTests(unittest.TestCase):
         self.assertIn("list[int | string]", diagnostics[1][1])
         self.assertIn("function return has type 'string'", diagnostics[2][1])
         self.assertIn("parameter requires 'int'", diagnostics[3][1])
+
+    def test_static_checker_accepts_union_values_that_runtime_accepts(self):
+        source = [
+            "define var value: int | string = 5",
+            "define var number: float = 0.0",
+            "set number = value",
+            "func define take_number amount:float",
+            "endfunc",
+            "func call take_number value",
+            "record define Box weight:float",
+            "record create Box box value",
+        ]
+        runtime = Runtime()
+        with contextlib.redirect_stdout(io.StringIO()):
+            execute_lines(source, runtime)
+
+        self.assertEqual(check_types(source), [])
+        self.assertEqual(runtime.require_var("number")["value"], 5.0)
+
+    def test_static_checker_accepts_optional_bool_conditions_and_unused_messages(self):
+        source = [
+            "define var enabled: bool | none = true",
+            "if enabled",
+            "    assert true 42",
+            "endif",
+            "assert enabled",
+        ]
+        runtime = Runtime()
+        with contextlib.redirect_stdout(io.StringIO()):
+            execute_lines(source, runtime)
+
+        self.assertEqual(check_types(source), [])
+        self.assertEqual(analyze_document("\n".join(source) + "\n"), [])
+
+    def test_static_checker_handles_enumerate_and_multitoken_annotations(self):
+        source = [
+            "define var items: list = [1, 2]",
+            "define var pairs: list = []",
+            "enumerate items pairs",
+            "define var mapping: dict[string, tuple[int, int]] = {}",
+        ]
+        self.assertEqual(check_types(source), [])
+        self.assertEqual(
+            analyze_document(
+                "define var mapping: dict[string, tuple[int, int]] = {}\n"
+            ),
+            [],
+        )
+
+    def test_static_checker_resolves_forward_records_and_defaults(self):
+        source = [
+            "record define Outer inner:Inner",
+            "record define Inner value:int",
+            "record create Inner inner 5",
+            "record create Outer outer inner",
+        ]
+        runtime = Runtime()
+        with contextlib.redirect_stdout(io.StringIO()):
+            execute_lines(source, runtime)
+
+        self.assertEqual(check_types(source), [])
+        self.assertEqual(analyze_document("\n".join(source) + "\n"), [])
+        outer = runtime.require_var("outer")["value"]
+        self.assertEqual(outer.fields["inner"].fields["value"], 5)
+
+        diagnostics = analyze_document(
+            "record define Point x:int=1 y:string='a'\n"
+            "record create Point copy y=1\n"
+        )
+        self.assertTrue(any(
+            "field 'y' requires 'string'" in item["message"]
+            for item in diagnostics
+        ))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # YubaLANG standard library
 
-YubaLANG 1.3 provides bundled modules under the reserved `std.*` namespace.
+YubaLANG 1.4 provides bundled modules under the reserved `std.*` namespace.
 Import one like any other module and call its functions with `func call`:
 
 ```hl
@@ -169,7 +169,7 @@ HTTP behavior should use local fixtures rather than an external service.
 ## Stability and async policy
 
 The standard-library API baseline is version 1.0, bundled with the YubaLANG
-1.3 runtime. The runtime version selects the standard-library API; a project
+1.4 runtime. The runtime version selects the standard-library API; a project
 manifest does not pin standard-library modules separately.
 
 - New modules and functions may be added compatibly within a minor runtime
@@ -184,7 +184,7 @@ manifest does not pin standard-library modules separately.
 - Platform or network APIs must document their side effects, resource limits,
   and error behavior. Standard-library exceptions are source-located.
 
-The 1.3 API is synchronous. YubaLANG has no event loop, cancellation model, or
+The 1.4 API is synchronous. YubaLANG has no event loop, cancellation model, or
 concurrent task semantics, so asynchronous I/O is deferred; the HTTP client
 and sleep operation block the calling program. Time and randomness have
 injectable host-runtime seams, filesystem and subprocess tests use isolated

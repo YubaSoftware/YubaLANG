@@ -46,6 +46,17 @@ class Debugger:
         self._breakpoints.remove(breakpoint)
         return True
 
+    @property
+    def breakpoints(self) -> tuple[tuple[str | None, int], ...]:
+        """Return registered breakpoints as (source_name, line) pairs."""
+        return tuple(sorted(
+            self._breakpoints,
+            key=lambda item: (item[0] or "", item[1]),
+        ))
+
+    def clear_breakpoints(self) -> None:
+        self._breakpoints.clear()
+
     def continue_execution(self) -> None:
         self._mode = "continue"
 

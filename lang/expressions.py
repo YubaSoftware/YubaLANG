@@ -70,43 +70,124 @@ def _normalize(source: str) -> str:
     return "".join(result)
 
 
+def _callable_name(node: ast.expr) -> str | None:
+    """Return a simple or dotted call target, or None for an unsupported target."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
 def parse_expression(source: str) -> ast.expr:
     try:
         expression = ast.parse(_normalize(source), mode="eval").body
     except SyntaxError as error:
         raise SyntaxError(f"Invalid expression: {error.msg}.") from error
-    allowed = (
-        ast.Constant, ast.Name, ast.List, ast.Tuple, ast.Set, ast.Dict,
-        ast.JoinedStr, ast.FormattedValue, ast.ListComp, ast.comprehension,
-        ast.Store,
-        ast.UnaryOp, ast.UAdd, ast.USub, ast.Not, ast.BinOp,
-        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
-        ast.BoolOp, ast.And, ast.Or, ast.Compare, ast.Eq, ast.NotEq,
-        ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Load,
-    )
-    for node in ast.walk(expression):
-        if not isinstance(node, allowed):
-            if not (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and (
-                    (node.func.id == "set" and not node.args and not node.keywords)
-                    or (
-                        node.func.id == "range"
-                        and 1 <= len(node.args) <= 3
-                        and not node.keywords
+
+    def validate(node: ast.AST) -> None:
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (str, int, float, bool, type(None))):
+                raise SyntaxError("Unsupported literal in expression.")
+            return
+        if isinstance(node, ast.Name):
+            return
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for item in node.elts:
+                validate(item)
+            return
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if key is None:
+                    raise SyntaxError(
+                        "Dictionary unpacking is not supported in expressions."
                     )
-                )
+                validate(key)
+                validate(value)
+            return
+        if isinstance(node, ast.JoinedStr):
+            for value in node.values:
+                validate(value)
+            return
+        if isinstance(node, ast.FormattedValue):
+            validate(node.value)
+            if node.format_spec is not None:
+                validate(node.format_spec)
+            if node.conversion not in (-1, ord("s"), ord("r"), ord("a")):
+                raise SyntaxError("Unsupported conversion in f-string.")
+            return
+        if isinstance(node, ast.ListComp):
+            if (
+                len(node.generators) != 1
+                or not isinstance(node.generators[0].target, ast.Name)
+                or node.generators[0].is_async
             ):
-                raise SyntaxError("Unsupported syntax in expression.")
-        if isinstance(node, ast.ListComp) and (
-            len(node.generators) != 1
-            or not isinstance(node.generators[0].target, ast.Name)
-            or node.generators[0].is_async
-        ):
-            raise SyntaxError(
-                "List comprehensions require one synchronous identifier target."
-            )
+                raise SyntaxError(
+                    "List comprehensions require one synchronous identifier target."
+                )
+            generator = node.generators[0]
+            validate(generator.iter)
+            for condition in generator.ifs:
+                validate(condition)
+            validate(node.elt)
+            return
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, (ast.UAdd, ast.USub, ast.Not)):
+                raise SyntaxError("Unsupported unary operator in expression.")
+            validate(node.operand)
+            return
+        if isinstance(node, ast.BinOp):
+            if type(node.op) not in _OPERATORS:
+                raise SyntaxError("Unsupported operator in expression.")
+            validate(node.left)
+            validate(node.right)
+            return
+        if isinstance(node, ast.BoolOp):
+            if not isinstance(node.op, (ast.And, ast.Or)):
+                raise SyntaxError("Unsupported boolean operator in expression.")
+            for value in node.values:
+                validate(value)
+            return
+        if isinstance(node, ast.Compare):
+            if any(type(operation) not in _COMPARISONS for operation in node.ops):
+                raise SyntaxError("Unsupported comparison in expression.")
+            validate(node.left)
+            for comparator in node.comparators:
+                validate(comparator)
+            return
+        if isinstance(node, ast.Call):
+            name = _callable_name(node.func)
+            if name is None:
+                raise SyntaxError(
+                    "Function calls in expressions require a name or qualified name."
+                )
+            if name == "range" and (
+                node.keywords or not 1 <= len(node.args) <= 3
+            ):
+                raise SyntaxError(
+                    "range() requires one to three positional arguments."
+                )
+            if any(isinstance(argument, ast.Starred) for argument in node.args):
+                raise SyntaxError(
+                    "Argument unpacking is not supported in expressions."
+                )
+            for argument in node.args:
+                validate(argument)
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    raise SyntaxError(
+                        "Keyword unpacking is not supported in expressions."
+                    )
+                validate(keyword.value)
+            return
+        if isinstance(node, ast.Load):
+            return
+        raise SyntaxError("Unsupported syntax in expression.")
+
+    validate(expression)
     return expression
 
 
@@ -179,16 +260,33 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 if include_value:
                     result.append(evaluate(node.elt, comprehension_values))
             return result
-        if (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "set" and not node.args and not node.keywords
-        ):
-            return set()
-        if (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "range"
-        ):
-            return range(*(evaluate(argument, local_values) for argument in node.args))
+        if isinstance(node, ast.Call):
+            name = _callable_name(node.func)
+            assert name is not None
+            if name == "set" and not node.args and not node.keywords:
+                return set()
+            if name == "range":
+                if node.keywords:
+                    raise TypeError("range() does not accept named arguments.")
+                return range(
+                    *(evaluate(argument, local_values) for argument in node.args)
+                )
+            arguments = [
+                evaluate(argument, local_values) for argument in node.args
+            ]
+            keyword_arguments = {
+                keyword.arg: evaluate(keyword.value, local_values)
+                for keyword in node.keywords
+                if keyword.arg is not None
+            }
+            invoker = runtime.function_invoker
+            if invoker is None:
+                from .interpreter import _invoke_function
+
+                invoker = lambda function_name, args, kwargs: _invoke_function(
+                    function_name, args, runtime, kwargs
+                )
+            return invoker(name, arguments, keyword_arguments)
         if isinstance(node, ast.UnaryOp):
             value = evaluate(node.operand, local_values)
             if isinstance(node.op, ast.UAdd) and _number(value):

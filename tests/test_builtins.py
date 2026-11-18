@@ -410,7 +410,83 @@ class BuiltinCommandTests(unittest.TestCase):
                 self.run_program(source)
             self.assertIn(message, output.getvalue())
 
-    def test_records_can_be_passed_and_returned_through_functions(self) -> None:
+    def test_record_fields_support_defaults_and_named_construction(self) -> None:
+        runtime = self.run_program(
+            """
+            record define Point x:int=1 y:int=2 label:string="origin"
+            record create Point default_point
+            record create Point partial 7
+            record create Point named y=9 label="named"
+            record create Point mixed 3 label="mixed"
+            """
+        )
+        default_point = runtime.require_var("default_point")["value"]
+        self.assertEqual(
+            default_point.fields, {"x": 1, "y": 2, "label": "origin"}
+        )
+        self.assertEqual(
+            runtime.require_var("partial")["value"].fields,
+            {"x": 7, "y": 2, "label": "origin"},
+        )
+        self.assertEqual(
+            runtime.require_var("named")["value"].fields,
+            {"x": 1, "y": 9, "label": "named"},
+        )
+        self.assertEqual(
+            runtime.require_var("mixed")["value"].fields,
+            {"x": 3, "y": 2, "label": "mixed"},
+        )
+
+    def test_record_defaults_are_evaluated_for_each_construction(self) -> None:
+        runtime = self.run_program(
+            """
+            define var base: int = 4
+            record define Box items:list=[]
+            record define Offset value:int=base
+            record create Box first
+            record create Box second
+            record create Offset offset
+            """
+        )
+        first = runtime.require_var("first")["value"]
+        second = runtime.require_var("second")["value"]
+        self.assertIsNot(first.fields["items"], second.fields["items"])
+        self.assertEqual(runtime.require_var("offset")["value"].fields["value"], 4)
+
+    def test_record_construction_reports_missing_unknown_and_duplicate_fields(self) -> None:
+        for source, message in (
+            (
+                "record define Point x:int y:int=2\nrecord create Point point",
+                "missing required field(s): x",
+            ),
+            (
+                "record define Point x:int\nrecord create Point point z=1",
+                "has no field named 'z'",
+            ),
+            (
+                "record define Point x:int\nrecord create Point point 1 x=1",
+                "got field 'x' more than once",
+            ),
+            (
+                "record define Point x:int\nrecord create Point point x=1 1",
+                "must come before named fields",
+            ),
+            (
+                "record define Point x:int=\nrecord create Point point",
+                "Default value for record field 'x' is missing",
+            ),
+            (
+                "record define Point x:int='wrong'\nrecord create Point point",
+                "requires type 'int'",
+            ),
+        ):
+            output = io.StringIO()
+            with self.subTest(source=source):
+                with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+                    self.run_program(source)
+            self.assertIn(message, output.getvalue())
+
+
         runtime = self.run_program(
             """
             record define Point x:int

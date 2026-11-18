@@ -29,8 +29,9 @@ endfunc
 func call congratulate learner
 ```
 
-YubaLANG uses one command per line. Commands such as `compare` store a result
-in a variable; they do not act as general expressions. Blocks are closed with
+YubaLANG uses one command per line. Expression-bearing commands accept
+literals, variables, arithmetic, comparisons, and function calls; commands such
+as `compare` still store their result in a variable. Blocks are closed with
 keywords such as `endif` and `endfunc`.
 
 ## 2. Check and run it
@@ -68,7 +69,10 @@ kept under test with its expected output.
 
 - Try the interactive interpreter with `YubaLANG repl` (or
   `py -3 YubaLANG.py repl` from the checkout); enter `exit` to leave.
-- Browse the [language reference](../1.3-docs.md) for commands, types, and
+- Debug a program with `YubaLANG debug --break [file:]line <file.yl>` and run
+  output tests with `YubaLANG test`; add `--coverage` for executable-line
+  coverage.
+- Browse the [language reference](../1.4-docs.md) for commands, types, and
   control flow.
 - Use the [examples](../../examples/) as complete programs.
 - For a project with imports and dependencies, see the

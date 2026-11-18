@@ -5,7 +5,15 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from .coverage import (
+    COVERAGE_ENVIRONMENT_VARIABLE,
+    display_path,
+    read_coverage,
+    summarize_coverage,
+)
 
 
 TEST_TIMEOUT_SECONDS = 10
@@ -38,14 +46,25 @@ def _first_difference(expected: str, actual: str) -> str:
     return f"line {max(1, len(expected_lines))}: trailing newline differs"
 
 
-def _run_case(program: Path) -> tuple[str, str, str, str]:
+def _run_case(
+    program: Path, coverage: bool = False
+) -> tuple[str, str, str, str, dict[str, dict[int, int]]]:
     expected_file = program.with_suffix(".expected.txt")
     if not expected_file.is_file():
-        return "ERROR", f"missing expected-output file: {expected_file}", "", ""
+        return "ERROR", f"missing expected-output file: {expected_file}", "", "", {}
 
+    coverage_path: str | None = None
+    coverage_hits: dict[str, dict[int, int]] = {}
+    environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     try:
         with expected_file.open("r", encoding="utf-8", newline="") as source:
             expected = _normalize_newlines(source.read())
+        if coverage:
+            handle, coverage_path = tempfile.mkstemp(
+                prefix="yubalang-coverage-", suffix=".json"
+            )
+            os.close(handle)
+            environment[COVERAGE_ENVIRONMENT_VARIABLE] = coverage_path
         result = subprocess.run(
             _interpreter_command(program),
             cwd=program.parent,
@@ -53,31 +72,40 @@ def _run_case(program: Path) -> tuple[str, str, str, str]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            env=environment,
             timeout=TEST_TIMEOUT_SECONDS,
             check=False,
         )
+        if coverage_path is not None:
+            coverage_hits = read_coverage(coverage_path)
     except (OSError, UnicodeError) as error:
-        return "ERROR", str(error), "", ""
+        return "ERROR", str(error), "", "", {}
     except subprocess.TimeoutExpired:
-        return "ERROR", f"timed out after {TEST_TIMEOUT_SECONDS} seconds", "", ""
+        return "ERROR", f"timed out after {TEST_TIMEOUT_SECONDS} seconds", "", "", {}
+    finally:
+        if coverage_path is not None:
+            try:
+                os.unlink(coverage_path)
+            except OSError:
+                pass
 
     if result.returncode != 0:
         detail = _normalize_newlines(result.stdout + result.stderr).strip()
         if not detail:
             detail = f"interpreter exited with status {result.returncode}"
-        return "ERROR", detail, expected, _normalize_newlines(result.stdout)
+        return "ERROR", detail, expected, _normalize_newlines(result.stdout), coverage_hits
 
     actual = _normalize_newlines(result.stdout)
     if actual != expected:
-        return "FAIL", _first_difference(expected, actual), expected, actual
-    return "PASS", "", expected, actual
+        return "FAIL", _first_difference(expected, actual), expected, actual, coverage_hits
+    return "PASS", "", expected, actual, coverage_hits
 
 
 def run_tests(
     path: Path,
     filter_pattern: str | None = None,
     output_format: str = "text",
+    coverage: bool = False,
 ) -> int:
     """Run all .yl tests under a directory, or one .yl test file."""
     path = path.resolve()
@@ -110,16 +138,28 @@ def run_tests(
 
     counts = {"PASS": 0, "FAIL": 0, "ERROR": 0}
     cases = []
+    root = path if path.is_dir() else path.parent
+    coverage_hits: dict[str, dict[int, int]] = {}
     for program in programs:
-        status, detail, expected, actual = _run_case(program)
+        status, detail, expected, actual, case_coverage = _run_case(program, coverage)
         counts[status] += 1
-        cases.append({
-            "name": str(program.relative_to(path if path.is_dir() else path.parent)),
+        case: dict[str, object] = {
+            "name": str(program.relative_to(root)),
             "status": status,
             "detail": detail,
             "expected": expected,
             "actual": actual,
-        })
+        }
+        if coverage:
+            for source_name, file_hits in case_coverage.items():
+                merged = coverage_hits.setdefault(source_name, {})
+                for line_number, hit_count in file_hits.items():
+                    merged[line_number] = merged.get(line_number, 0) + hit_count
+            case["coverage"] = {
+                display_path(source_name, root): sorted(file_hits)
+                for source_name, file_hits in sorted(case_coverage.items())
+            }
+        cases.append(case)
         if output_format == "text":
             print(f"{status}: {program}")
             if detail:
@@ -130,16 +170,33 @@ def run_tests(
                     fromfile="expected", tofile="actual", lineterm="",
                 )))
 
+    summary = (
+        summarize_coverage(coverage_hits, programs, root) if coverage else None
+    )
     if output_format == "json":
-        print(json.dumps({
+        report = {
             "path": str(path),
             "filter": filter_pattern,
             "counts": counts,
             "tests": cases,
-        }, indent=2))
+        }
+        if summary is not None:
+            report["coverage"] = summary
+        print(json.dumps(report, indent=2))
     else:
         print(
             f"Results: {counts['PASS']} passed, {counts['FAIL']} failed, "
             f"{counts['ERROR']} errored"
         )
+        if summary is not None:
+            print(
+                f"Coverage: {summary['percent']:.1f}% "
+                f"({summary['covered']}/{summary['total']} executable lines)"
+            )
+            for file_report in summary["files"]:
+                print(
+                    f"  {file_report['path']}: "
+                    f"{file_report['percent']:.1f}% "
+                    f"({file_report['covered']}/{file_report['total']})"
+                )
     return 1 if counts["FAIL"] or counts["ERROR"] else 0

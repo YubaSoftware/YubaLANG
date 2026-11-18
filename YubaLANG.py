@@ -114,6 +114,62 @@ def _format_paths(paths: list[str], check: bool) -> int:
     return 0
 
 
+def _debug_input(prompt: str) -> str:
+    print(prompt, end="", file=sys.stderr, flush=True)
+    line = sys.stdin.readline()
+    if line == "":
+        raise EOFError
+    return line.rstrip("\r\n")
+
+
+def _debug_file(filename: str, breakpoints: list[str]) -> int:
+    from lang.debugger import Debugger
+    from lang.debugger_frontend import DebuggerExit, DebuggerFrontend
+
+    def load_source(source_name: str) -> list[str] | None:
+        try:
+            return Path(source_name).read_text(
+                encoding="utf-8-sig"
+            ).splitlines()
+        except (OSError, UnicodeError):
+            return None
+
+    debugger = Debugger(lambda event: frontend.on_stop(event))
+    frontend = DebuggerFrontend(
+        debugger,
+        input_fn=_debug_input,
+        output_fn=lambda text: print(text, file=sys.stderr),
+        source_loader=load_source,
+    )
+    for specification in breakpoints:
+        source_name, separator, line_source = specification.rpartition(":")
+        if not separator:
+            source_name, line_source = filename, specification
+        try:
+            line_number = int(line_source)
+        except ValueError:
+            print(
+                f"debug: invalid breakpoint '{specification}'",
+                file=sys.stderr,
+            )
+            return 2
+        if line_number < 1:
+            print(
+                f"debug: invalid breakpoint '{specification}'",
+                file=sys.stderr,
+            )
+            return 2
+        debugger.add_breakpoint(line_number, source_name)
+    try:
+        run_file(filename, debugger=debugger)
+    except DebuggerExit:
+        print("Debug session ended.", file=sys.stderr)
+    except OSError as error:
+        print(f"debug: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "--lsp":
         serve()
@@ -148,6 +204,30 @@ def main():
             sys.exit(2)
         sys.exit(_check_file(sys.argv[2]))
 
+    if len(sys.argv) >= 2 and sys.argv[1] == "debug":
+        arguments = sys.argv[2:]
+        breakpoints: list[str] = []
+        positional: list[str] = []
+        while arguments:
+            argument = arguments.pop(0)
+            if argument in ("--break", "-b"):
+                if not arguments:
+                    print("debug: --break requires [file:]line", file=sys.stderr)
+                    sys.exit(2)
+                breakpoints.append(arguments.pop(0))
+            elif argument.startswith("-"):
+                print(f"debug: unknown option: {argument}", file=sys.stderr)
+                sys.exit(2)
+            else:
+                positional.append(argument)
+        if len(positional) != 1:
+            print(
+                "Usage: py YubaLANG.py debug [--break [file:]line]... <file.yl>",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        sys.exit(_debug_file(positional[0], breakpoints))
+
     if len(sys.argv) >= 2 and sys.argv[1] == "fmt":
         arguments = sys.argv[2:]
         check = False
@@ -162,6 +242,7 @@ def main():
         arguments = sys.argv[2:]
         filter_pattern = None
         output_format = "text"
+        coverage = False
         path = Path("tests/cases")
         positional = []
         while arguments:
@@ -173,6 +254,8 @@ def main():
                 filter_pattern = arguments.pop(0)
             elif argument == "--json":
                 output_format = "json"
+            elif argument == "--coverage":
+                coverage = True
             elif argument.startswith("-"):
                 print(f"test: unknown option: {argument}", file=sys.stderr)
                 sys.exit(2)
@@ -181,20 +264,21 @@ def main():
         if len(positional) > 1:
             print(
                 "Usage: py YubaLANG.py test [--filter PATTERN] [--json] "
-                "[test-file.yl|test-directory]",
+                "[--coverage] [test-file.yl|test-directory]",
                 file=sys.stderr,
             )
             sys.exit(2)
         if positional:
             path = Path(positional[0])
-        sys.exit(run_tests(path, filter_pattern, output_format))
+        sys.exit(run_tests(path, filter_pattern, output_format, coverage))
 
     if len(sys.argv) < 2:
         print(
             "Usage: py YubaLANG.py <file.yl> [arguments...] | "
             "run [project-directory] [-- arguments...] | repl | --lsp | "
-            "check <file.yl> | fmt [--check|--write] <file.yl|directory>... | "
-            "test [--filter PATTERN] [--json] [test-file.yl|test-directory] | "
+            "check <file.yl> | debug [--break [file:]line]... <file.yl> | "
+            "fmt [--check|--write] <file.yl|directory>... | "
+            "test [--filter PATTERN] [--json] [--coverage] [test-file.yl|test-directory] | "
             "package <init|add|remove|install|update|list|check>"
         )
         sys.exit(1)

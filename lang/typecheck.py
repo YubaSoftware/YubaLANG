@@ -183,25 +183,40 @@ def _expression_type(
             return "int"
         if isinstance(node, (ast.BoolOp, ast.Compare)):
             return "bool"
-        if (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "set" and not node.args and not node.keywords
-        ):
-            return "set"
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id == "set" and not node.args and not node.keywords:
+                    return "set"
+                function_type = (functions or {}).get(node.func.id)
+                if function_type is not None:
+                    spec = parse_type(function_type)
+                    if spec.name == "function" and spec.arguments:
+                        return format_type(spec.arguments[-1])
+            return None
         return None
 
     return infer(expression)
 
 
-def _compatible(actual: str | None, expected: str) -> bool:
+def _compatible(
+    actual: str | None, expected: str, top_level: bool = True
+) -> bool:
     if actual is None:
         return True
     actual_spec, expected_spec = parse_type(actual), parse_type(expected)
     if expected_spec.name == "union":
-        return any(_compatible(actual, format_type(option)) for option in expected_spec.arguments)
+        return any(
+            _compatible(actual, format_type(option), top_level)
+            for option in expected_spec.arguments
+        )
     if actual_spec.name == "union":
+        if top_level:
+            return any(
+                _compatible(format_type(option), expected, False)
+                for option in actual_spec.arguments
+            )
         return all(
-            _compatible(format_type(option), expected)
+            _compatible(format_type(option), expected, False)
             for option in actual_spec.arguments
         )
     if actual_spec.name == "int" and expected_spec.name == "float":
@@ -215,8 +230,8 @@ def _compatible(actual: str | None, expected: str) -> bool:
     if len(actual_spec.arguments) != len(expected_spec.arguments):
         return False
     return all(
-        _compatible(format_type(actual_item), format_type(expected_item))
-        and _compatible(format_type(expected_item), format_type(actual_item))
+        _compatible(format_type(actual_item), format_type(expected_item), False)
+        and _compatible(format_type(expected_item), format_type(actual_item), False)
         for actual_item, expected_item in zip(
             actual_spec.arguments, expected_spec.arguments
         )
@@ -245,8 +260,12 @@ def _result_type(
                 destination_index = {3: 2, 4: 3, 5: 3}.get(len(parts))
                 if destination_index is not None:
                     return parts[destination_index], "list"
-            if command in ("enumerate", "filter", "map"):
-                return parts[3], "list"
+            if command == "enumerate":
+                return parts[2], "list"
+            if command in ("filter", "map"):
+                if len(parts) >= 4:
+                    return parts[3], "list"
+                return None
             if command in ("reversed", "sorted"):
                 return parts[2], "list"
             return parts[-1], "list"
@@ -280,17 +299,58 @@ def _result_type(
     return None
 
 
+def _record_definition(
+    declarations: list[str], known_records: set[str]
+) -> tuple[dict[str, str], set[str]]:
+    fields: dict[str, str] = {}
+    defaults: set[str] = set()
+    for declaration in declarations:
+        if ":" not in declaration:
+            continue
+        field_name, _, type_source = declaration.partition(":")
+        type_source, default_separator, _ = type_source.partition("=")
+        try:
+            spec = parse_type(type_source)
+        except ValueError:
+            continue
+        if is_known_type(spec, known_records):
+            fields[field_name] = format_type(spec)
+            if default_separator:
+                defaults.add(field_name)
+    return fields, defaults
+
+
 def check_types(lines: list[str]) -> list[tuple[int, str]]:
     """Return (zero-based line, diagnostic) pairs for definite type mismatches."""
     diagnostics: list[tuple[int, str]] = []
     globals_: dict[str, str | None] = {}
     scopes = [globals_]
     record_types: dict[str, dict[str, str]] = {}
+    record_defaults: dict[str, set[str]] = {}
     function_types: dict[str, str | None] = {}
     function_parameters: dict[str, list[tuple[str, str | None]]] = {}
     function_returns: list[str | None] = []
     function_depth = 0
     block_stack: list[str] = []
+
+    # Collect record names first so forward record annotations resolve, then
+    # parse every declaration against the complete set of record names.
+    record_declarations: list[tuple[str, list[str]]] = []
+    for line in lines:
+        stripped_line = line.strip()
+        if not stripped_line or stripped_line.startswith("#"):
+            continue
+        try:
+            parts = list(tokenize_line(stripped_line))
+        except SyntaxError:
+            continue
+        if len(parts) >= 3 and parts[:2] == ["record", "define"]:
+            record_declarations.append((parts[2], parts[3:]))
+    record_names = {name for name, _ in record_declarations}
+    for name, declarations in record_declarations:
+        fields, defaults = _record_definition(declarations, record_names)
+        record_types[name] = fields
+        record_defaults[name] = defaults
 
     for line_number, line in enumerate(lines):
         stripped = line.strip()
@@ -403,30 +463,66 @@ def check_types(lines: list[str]) -> list[tuple[int, str]]:
             )
             target[name] = type_name
         if parts[0] == "record" and len(parts) >= 3 and parts[1] == "define":
-            fields = {}
-            for declaration in parts[3:]:
-                if declaration.count(":") == 1:
-                    field_name, field_type = declaration.split(":", 1)
-                    try:
-                        spec = parse_type(field_type)
-                    except ValueError:
-                        continue
-                    if is_known_type(spec, set(record_types)):
-                        fields[field_name] = format_type(spec)
+            fields, defaults = _record_definition(parts[3:], record_names)
             record_types[parts[2]] = fields
+            record_defaults[parts[2]] = defaults
             continue
         if parts[0] == "record" and len(parts) >= 4 and parts[1] == "create":
             record_name, variable_name = parts[2], parts[3]
             fields = record_types.get(record_name)
             if fields is not None:
-                values = parts[4:]
-                if len(values) != len(fields):
+                field_names = list(fields)
+                positional: list[str] = []
+                named: dict[str, str] = {}
+                saw_named = False
+                for token in parts[4:]:
+                    field_name, separator, value = token.partition("=")
+                    if separator and field_name.isidentifier():
+                        saw_named = True
+                        named[field_name] = value
+                    else:
+                        if saw_named:
+                            diagnostics.append((
+                                line_number,
+                                "Type mismatch: positional record field values "
+                                "must come before named fields.",
+                            ))
+                        positional.append(token)
+                if len(positional) > len(field_names):
                     diagnostics.append((
                         line_number,
-                        f"Record '{record_name}' expects {len(fields)} field value(s), "
-                        f"but got {len(values)}.",
+                        f"Record '{record_name}' expects {len(field_names)} field "
+                        f"value(s), but got {len(positional)}.",
                     ))
-                for (field_name, expected), token in zip(fields.items(), values):
+                assigned: dict[str, str] = dict(zip(field_names, positional))
+                for field_name, value in named.items():
+                    if field_name not in fields:
+                        diagnostics.append((
+                            line_number,
+                            f"Record '{record_name}' has no field named "
+                            f"'{field_name}'.",
+                        ))
+                    elif field_name in assigned:
+                        diagnostics.append((
+                            line_number,
+                            f"Record '{record_name}' got field '{field_name}' "
+                            "more than once.",
+                        ))
+                    else:
+                        assigned[field_name] = value
+                defaults = record_defaults.get(record_name, set())
+                missing = [
+                    field_name for field_name in field_names
+                    if field_name not in assigned and field_name not in defaults
+                ]
+                if missing:
+                    diagnostics.append((
+                        line_number,
+                        f"Record '{record_name}' is missing required field(s): "
+                        f"{', '.join(missing)}.",
+                    ))
+                for field_name, token in assigned.items():
+                    expected = fields[field_name]
                     actual = _type_of(token, variables, function_types)
                     if actual is not None and not _compatible(actual, expected):
                         diagnostics.append((
@@ -471,15 +567,21 @@ def check_types(lines: list[str]) -> list[tuple[int, str]]:
         if parts[0] == "assert":
             if len(parts) >= 2:
                 condition_type = _type_of(parts[1], variables, function_types)
-                if condition_type is not None and condition_type != "bool":
+                if (
+                    condition_type is not None
+                    and not _compatible(condition_type, "bool")
+                ):
                     diagnostics.append((
                         line_number,
                         f"Type mismatch: assert condition has type '{condition_type}', "
                         "expected 'bool'.",
                     ))
-            if len(parts) == 3:
+            if len(parts) == 3 and parts[1].lower() != "true":
                 message_type = _type_of(parts[2], variables, function_types)
-                if message_type is not None and message_type != "string":
+                if (
+                    message_type is not None
+                    and not _compatible(message_type, "string")
+                ):
                     diagnostics.append((
                         line_number,
                         f"Type mismatch: assert message has type '{message_type}', "
@@ -488,7 +590,7 @@ def check_types(lines: list[str]) -> list[tuple[int, str]]:
             continue
         if parts[0] in ("if", "elseif") and len(parts) > 1:
             actual = _type_of(" ".join(parts[1:]), variables, function_types)
-            if actual is not None and actual != "bool":
+            if actual is not None and not _compatible(actual, "bool"):
                 diagnostics.append((
                     line_number,
                     f"Type mismatch: condition has type '{actual}', expected 'bool'.",
@@ -497,7 +599,7 @@ def check_types(lines: list[str]) -> list[tuple[int, str]]:
             parts[0] == "loop" and len(parts) > 2 and parts[1] == "while"
         ):
             actual = _type_of(" ".join(parts[2:]), variables, function_types)
-            if actual is not None and actual != "bool":
+            if actual is not None and not _compatible(actual, "bool"):
                 diagnostics.append((
                     line_number,
                     f"Type mismatch: loop condition has type '{actual}', expected 'bool'.",

@@ -2,9 +2,9 @@
 
 This is the central reference for the language and its tools. It documents
 the implemented behavior in this repository, including the extended type
-annotations, runtime, modules, package workflow, formatter, test runner,
-language server, and native C interface. The focused guides linked below
-provide additional installation and operational detail.
+annotations, runtime, modules, package workflow, formatter, test runner and
+coverage, debugger, language server, and native C interface. The focused guides
+linked below provide additional installation and operational detail.
 
 ## Contents
 
@@ -43,6 +43,7 @@ When running from a source checkout, use `py -3 YubaLANG.py` instead of
 | `YubaLANG run [project-directory] [-- arguments...]` | Execute the manifest entry point. |
 | `YubaLANG repl` | Start an interactive interpreter session. |
 | `YubaLANG check <file.yl>` | Report static diagnostics without execution. |
+| `YubaLANG debug [--break [file:]line]... <file.yl>` | Run with the interactive debugger. |
 | `YubaLANG fmt [--check\|--write] <file-or-directory>...` | Check or format source. |
 | `YubaLANG test [options] [file-or-directory]` | Run output-based tests. |
 | `YubaLANG package <subcommand>` | Manage project dependencies. |
@@ -50,7 +51,7 @@ When running from a source checkout, use `py -3 YubaLANG.py` instead of
 
 The [installation guide](setup/install.md) documents supported release platforms,
 installers, executable distribution, and its smoke-test coverage for project
-initialization, restore, imports, tests, formatting, and LSP startup.
+initialization, restore, imports, tests, coverage, formatting, and LSP startup.
 New users can start with the [getting-started guide](guides/getting-started.md).
 
 ## Source syntax
@@ -166,15 +167,23 @@ declared type and value.
 
 `YubaLANG check <file.yl>` runs an opt-in static analysis without executing the
 program. It diagnoses statically evident syntax and type mismatches, including
-known literal, generic, and typed-function cases. Dynamic or unknown values
-may not be diagnosed; runtime checks remain authoritative.
+known literal, generic, typed-function, union, record-construction, and
+expression-call cases. Dynamic or unknown values may not be diagnosed; runtime
+checks remain authoritative.
 
 ## Expressions and literals
 
 Expression-bearing commands accept literals, variable names, collections,
 parentheses, arithmetic operators, comparisons, and boolean operators. The
 precedence and grammar are specified in the
-[YubaLANG 1.3 reference](1.3-docs.md#formal-grammar).
+[YubaLANG 1.4 reference](1.4-docs.md#formal-grammar).
+
+Expressions may also call user-defined functions and imported standard-library
+functions by name or qualified name, with positional or `name=value` keyword
+arguments. `range(...)` and the empty `set()` constructor remain expression
+forms. Attribute/index expressions, method receivers, `*`/`**` unpacking, and
+calls on call results are not supported. See
+[function calls in expressions](1.4-docs.md#expressions-and-assignment).
 
 `set <variable> = <expression>` assigns to an existing variable without
 changing its declared type:
@@ -408,21 +417,34 @@ and return values; typed function references can be used by `map` and
 
 ## Records
 
-Define a named record type, then construct a value in field declaration order:
+Define a named record type, then construct a value positionally, by field name,
+or with positional values followed by named values:
 
 ```hl
 record define Point x:int y:int
 record create Point origin 10 20
+record create Point named y=25 x=10
+
+record define Settings retries:int=3 label:string="default"
+record create Settings settings label="strict"
 
 define var x: int = 0
 getattr origin x x
 setattr origin y 25
 ```
 
-`getattr`, `hasattr`, and `setattr` work with records. Construction and
-mutation check declared field types. Same-type records compare structurally.
-Assigning a record aliases the same mutable value. Records currently have no
-methods, inheritance, or default fields.
+A field declaration may include a default after `=`. Defaults are evaluated
+each time the record is constructed, so mutable defaults are not shared, and a
+default may refer to a variable that exists at construction time. Defaults use
+the same literal-or-variable value forms as record field values. A field type
+may name a record declared elsewhere in the same source file; the referenced
+record must be defined before a value containing it is constructed. Construction
+reports missing required fields, unknown names, duplicates, positional values
+after named values, and type mismatches. `getattr`, `hasattr`, and `setattr`
+work with records. Construction and mutation check declared field types, with
+integer-to-float widening for `float` fields. Same-type records compare
+structurally. Assigning a record aliases the same mutable value. Record
+methods, inheritance, and code-running constructors remain unspecified.
 
 ## Errors, assertions, and cleanup
 
@@ -456,8 +478,13 @@ handle language/runtime errors, not Python implementation defects.
 
 Files opened with `open` are tracked by the runtime and closed at the end of
 file execution, including those opened in function-local scopes. Use `close`
-for deterministic early closure. Runtime-backed iterators and native handles
-do not currently have a general cleanup protocol.
+for deterministic early closure. Cleanup runs in reverse registration order,
+attempts every resource even when one `close()` fails, and raises the first
+failure after all cleanup has been attempted. Hosts can track any object with a
+`close()` method through `Runtime.register_resource`, `close_resource`, and
+`close_resources`; see
+[resource lifecycle](1.4-docs.md#resource-lifecycle). Closing an already closed
+resource is a no-op.
 
 User-defined function calls are limited to 128 nested calls. Host memory
 exhaustion is reported as a source diagnostic with a sizing hint; collections
@@ -476,8 +503,8 @@ Module-level functions are public by default. Declare a helper with
 functions in that module can still call the helper. Private visibility is
 limited to module-level functions.
 
-Projects use `yuba.json` and `yuba.lock.json`. YubaLANG 1.3 accepts manifests
-targeting runtime 1.2 or 1.3 and reads lockfile formats 1, 2, and 3. Format 1
+Projects use `yuba.json` and `yuba.lock.json`. YubaLANG 1.4 accepts manifests
+targeting runtime 1.2, 1.3, or 1.4 and reads lockfile formats 1, 2, and 3. Format 1
 records direct dependencies, format 2 records path/Git dependency graphs, and
 format 3 records registry releases, artifact hashes, and the complete graph.
 YubaLANG's package commands write format 2 for path/Git dependencies; YubaPKG
@@ -544,15 +571,20 @@ accepts `exit` or `quit` to leave. Enter `reset` to close tracked files and
 start with a fresh runtime. End-of-file discards an incomplete block with a
 notice.
 
-### Debugger hooks
+### Debugger
 
 The host API in `lang.debugger` provides line breakpoints, continue, step into,
 step over, and step out. Attach a `Debugger` to a `Runtime`; its synchronous
 callback receives a `DebugEvent` before each stopped statement, including the
 source location, call stack, function depth, and a read-only shallow snapshot
 of visible variables. A callback can block to pause execution and select the
-next action through the debugger methods. There is no interactive debugger
-command-line frontend.
+next action through the debugger methods.
+
+`YubaLANG debug [--break [file:]line]... <file.yl>` provides an interactive
+terminal frontend over the same hooks. It supports breakpoints, continue, step,
+next, finish, stack, variables, source listing, and quit, writing prompts to
+standard error so program output is unchanged. See the
+[debugger section](1.4-docs.md#debugger-hooks-and-interactive-frontend).
 
 ### Test runner
 
@@ -561,13 +593,21 @@ standard output is compared in separate interpreter processes. The runner
 supports:
 
 ```text
-YubaLANG test [--filter PATTERN|-k PATTERN] [--json] [file-or-directory]
+YubaLANG test [--filter PATTERN|-k PATTERN] [--json] [--coverage] [file-or-directory]
 ```
 
 The default directory is `tests/cases`. Text output includes unified diffs
 for mismatches. JSON output reports the path, filter, counts, test names,
-statuses, details, expected output, and actual output. The runner does not
-report coverage: it has no source-level execution counters.
+statuses, details, expected output, and actual output. With `--coverage`, each
+test also runs with the `YUBALANG_COVERAGE_FILE` side channel enabled, and the
+report adds executable-line hit counts, per-file percentages, and uncovered
+line numbers. Coverage is opt-in; without the flag the output and JSON report
+are unchanged. The interpreter writes the side channel named by
+`YUBALANG_COVERAGE_FILE` as
+`{"version": 1, "files": {"<source>": {"<line>": <hits>}}}`, and the runner
+reports an overall percentage, per-file percentages, and uncovered lines. A
+line is executable when it contains a statement; blank lines, comments, and
+block terminators are excluded. JSON reports add a `coverage` object.
 
 ### Formatter
 
@@ -591,12 +631,19 @@ Start with `YubaLANG --lsp` (or `py -3 YubaLANG.py --lsp` in a checkout). The
 stdio LSP provides diagnostics, go-to-definition, hover, completion, signature
 help, references, rename, document/workspace symbols, and typo quick fixes.
 It supports full and ranged document changes, rejects stale versions, and
-clears state on close. In projects, it resolves imports from the nearest
-manifest and checked lockfile without network access, and provides read-only
-language features for public dependency functions. The server does not execute
-source; references and rename remain limited to open documents and it does not
-index unopened project files. VS Code requires a generic LSP client extension.
-See [language server setup](tools/language-server.md).
+clears state on close. The server indexes `.yl` files under initialized
+workspace folders on demand, caches them by modification time, and invalidates
+entries on open, change, close, and watched-file notifications. Workspace
+symbols, completion, unique definition lookup, references, and rename therefore
+include top-level declarations in unopened files. Workspace-wide references and
+rename are limited to top-level variables, functions, and record types; locals
+and parameters remain limited to open documents for rename safety. The index
+skips hidden and dependency directories and files larger than 1 MiB. In
+projects, the server resolves imports from the nearest manifest and checked
+lockfile without network access, and provides read-only language features for
+public dependency functions. The server does not execute source. VS Code
+requires a generic LSP client extension. See
+[language server setup](tools/language-server.md).
 
 ## Native C interface
 
@@ -623,14 +670,16 @@ trusted libraries. See the [C ABI guide](features/c-abi.md).
   collection literals and collection-producing built-ins create a new outer
   container without deep-copying its elements, so a tuple may contain shared
   mutable values.
-- Function calls in expressions remain limited to `range`; other function
-  calls are statement commands. Static inference is conservative, and dynamic
-  values may evade static diagnostics while remaining subject to runtime
-  checks.
-- There is no bytecode compiler, project build command, interactive debugger
-  frontend, coverage instrumentation, or filesystem-wide LSP index.
-- The runtime has no general deterministic resource protocol for iterators or
-  future native resource wrappers. Files are explicitly tracked and closed.
+- Function calls in expressions support user-defined and imported
+  standard-library functions, plus `range(...)` and `set()`. Attribute/index
+  expressions, method receivers, and argument unpacking remain unsupported.
+  Static inference is conservative, and dynamic values may evade static
+  diagnostics while remaining subject to runtime checks.
+- There is no bytecode compiler, project build command, record methods or
+  inheritance, or asynchronous runtime.
+- Resources registered with the runtime are closed deterministically in reverse
+  order; resource-backed iterators and native handles do not yet have a
+  language-level protocol.
 - The C bridge is intentionally narrow and does not transfer pointers or
   ownership.
 
@@ -650,16 +699,16 @@ Language and runtime changes follow these rules:
 - Changes to the YubaLANG/YubaPKG boundary must update the compatibility
   matrix and include cross-tool integration coverage.
 
-The 1.3 design remains interpreter-only: the measured workloads do not show
+The 1.4 design remains interpreter-only: the measured workloads do not show
 that a bytecode target is needed, and distribution is handled by standalone
 executables. Concurrency and asynchronous execution remain deferred until
-cancellation, error propagation, and shared-state rules are designed.
-Records are the current data-modeling feature; class methods, inheritance, and
-initialization semantics are not defined. The current package workflow does
-not build generated code or native dependencies into application bundles;
-that scope should be evaluated against concrete distribution needs. The C
-ABI remains the only native extension boundary; no non-C plugin mechanism is
-defined.
+cancellation, error propagation, scheduling, and shared-state rules are
+designed. Records gained field defaults and named construction; record methods,
+inheritance, and code-running constructors still require a separate proposal.
+The current package workflow does not build generated code or native
+dependencies into application bundles; that scope remains gated on concrete
+distribution needs. The C ABI remains the only native extension boundary; no
+non-C plugin mechanism is defined.
 
 For an introductory path, begin with the [getting-started guide](guides/getting-started.md)
 and [documentation guide](index.md), then

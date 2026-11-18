@@ -1,5 +1,6 @@
 ﻿"""Source loading and control-flow execution for YubaLANG."""
 
+import os
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -491,6 +492,24 @@ def _execute_try_block(
     return index
 
 
+def _collect_record_type_names(lines: list[str], runtime: Runtime) -> None:
+    """Register record names before execution so field types may refer forward."""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            parts = _split_cached(stripped)
+        except SyntaxError:
+            continue
+        if (
+            len(parts) >= 3
+            and parts[:2] == ("record", "define")
+            and parts[2].isidentifier()
+        ):
+            runtime.record_type_names.add(parts[2])
+
+
 def execute_lines(
     lines: list[str],
     runtime: Runtime | None = None,
@@ -499,6 +518,13 @@ def execute_lines(
     namespace: str | None = None,
 ) -> None:
     runtime = runtime or Runtime()
+    _collect_record_type_names(lines, runtime)
+    if runtime.function_invoker is None:
+        runtime.function_invoker = (
+            lambda name, arguments, keyword_arguments: _invoke_function(
+                name, arguments, runtime, keyword_arguments
+            )
+        )
     if line_numbers is None:
         line_numbers = list(range(1, len(lines) + 1))
     if len(line_numbers) != len(lines):
@@ -514,6 +540,8 @@ def execute_lines(
             continue
 
         runtime.current_location = (source_name, statement_line)
+        if runtime.coverage is not None:
+            runtime.coverage.record(source_name, statement_line)
         if runtime.debugger is not None:
             runtime.debugger.on_line(runtime, source_name, statement_line)
 
@@ -813,18 +841,40 @@ def execute_lines(
         index += 1
 
 
-def run_file(filename: str, program_args: list[str] | None = None) -> None:
+def run_file(
+    filename: str,
+    program_args: list[str] | None = None,
+    runtime: Runtime | None = None,
+    debugger: Any = None,
+) -> Runtime:
     with open(filename, "r", encoding="utf-8-sig") as source_file:
         lines = source_file.readlines()
-    runtime = Runtime()
+    runtime = runtime or Runtime()
     runtime.program_args = list(program_args or [])
     runtime.project_root = find_project_root(Path(filename))
+    if debugger is not None:
+        runtime.debugger = debugger
+
+    coverage_path = os.environ.get("YUBALANG_COVERAGE_FILE")
+    collector = None
+    if coverage_path:
+        from .coverage import CoverageCollector
+
+        collector = CoverageCollector()
+        runtime.coverage = collector
     try:
         execute_lines(lines, runtime, filename)
     except ReturnException:
         pass
     finally:
-        runtime.close_files()
+        try:
+            runtime.close_resources()
+        finally:
+            if collector is not None and coverage_path:
+                from .coverage import write_coverage
+
+                write_coverage(coverage_path, collector)
+    return runtime
 
 
 if __name__ == "__main__":

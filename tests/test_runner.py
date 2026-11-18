@@ -128,6 +128,52 @@ class TestRunnerTests(unittest.TestCase):
         self.assertIn("-expected", result.stdout)
         self.assertIn("+actual", result.stdout)
 
+    def test_coverage_reports_executed_and_uncovered_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "branches.yl").write_text(
+                "define var flag: bool = true\n"
+                "if flag\n"
+                '    text output "hit"\n'
+                "else\n"
+                '    text output "miss"\n'
+                "endif\n",
+                encoding="utf-8",
+            )
+            (folder / "branches.expected.txt").write_text("hit\n", encoding="utf-8")
+            result = run_cli("test", "--coverage", folder)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Results: 1 passed, 0 failed, 0 errored", result.stdout)
+        self.assertIn("Coverage:", result.stdout)
+        self.assertIn("branches.yl: 75.0%", result.stdout)
+
+    def test_json_coverage_is_additive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "branches.yl").write_text(
+                "define var flag: bool = true\n"
+                "if flag\n"
+                '    text output "hit"\n'
+                "else\n"
+                '    text output "miss"\n'
+                "endif\n",
+                encoding="utf-8",
+            )
+            (folder / "branches.expected.txt").write_text("hit\n", encoding="utf-8")
+            with_coverage = run_cli("test", "--json", "--coverage", folder)
+            without_coverage = run_cli("test", "--json", folder)
+
+        report = json.loads(with_coverage.stdout)
+        self.assertIn("coverage", report)
+        self.assertEqual(report["coverage"]["covered"], 3)
+        self.assertEqual(report["coverage"]["total"], 4)
+        self.assertEqual(
+            report["coverage"]["files"][0]["uncovered"], [5]
+        )
+        self.assertIn("coverage", report["tests"][0])
+        self.assertNotIn("coverage", json.loads(without_coverage.stdout))
+
 
 if __name__ == "__main__":
     unittest.main()

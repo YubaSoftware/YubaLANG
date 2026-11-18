@@ -2,9 +2,9 @@
 
 Use this page to find a guide by task. The [master reference](master-reference.md)
 is the consolidated reference for the current language, runtime, and tools.
-The [1.3 language reference](1.3-docs.md) describes the versioned language
-specification; consult it alongside the
-[migration notes](releases/1.3-migration.md) when updating code from 1.2.
+The [1.4 language reference](1.4-docs.md) describes the versioned language
+specification; consult the [1.3 to 1.4 migration notes](releases/1.4-migration.md)
+when updating code from 1.3.
 
 Supporting documents are grouped into `guides/`, `features/`, `projects/`,
 `tools/`, `setup/`, and `releases/`. The versioned language reference and
@@ -21,8 +21,8 @@ master reference remain at the top level.
 
 - [Master reference](master-reference.md): language, runtime, commands, and
   developer tools.
-- [1.3 language reference](1.3-docs.md): versioned grammar, expressions,
-  types, control flow, and runtime semantics.
+- [1.4 language reference](1.4-docs.md): versioned grammar, expressions,
+  types, control flow, resource lifecycle, and runtime semantics.
 - [Built-ins](features/builtins.md): function signatures and examples.
 - [Standard library](features/standard-library.md): bundled `std.*` modules,
   API behavior, limits, and stability policy.
@@ -44,6 +44,8 @@ master reference remain at the top level.
 ## Interoperability and version history
 
 - [Calling native C functions](features/c-abi.md).
+- [1.3 to 1.4 migration notes](releases/1.4-migration.md).
+- [1.4.0 release notes](releases/1.4-release-notes.md).
 - [1.2 to 1.3 migration notes](releases/1.3-migration.md).
 - [1.3.0 release notes](releases/1.3-release-notes.md).
 

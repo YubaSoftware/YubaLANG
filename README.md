@@ -8,7 +8,7 @@ Start with the [documentation guide](docs/index.md) to choose a path.
 ### Learn the language
 
 - [Getting started](docs/guides/getting-started.md)
-- [YubaLANG 1.3 language reference](docs/1.3-docs.md)
+- [YubaLANG 1.4 language reference](docs/1.4-docs.md)
 - [Master feature reference](docs/master-reference.md)
 - [Built-in function reference](docs/features/builtins.md)
 - [Standard library](docs/features/standard-library.md)
@@ -26,6 +26,8 @@ Start with the [documentation guide](docs/index.md) to choose a path.
 
 - [Calling C functions](docs/features/c-abi.md)
 - [Runtime performance](docs/tools/performance.md)
+- [1.3 to 1.4 migration notes](docs/releases/1.4-migration.md)
+- [1.4.0 release notes](docs/releases/1.4-release-notes.md)
 - [1.2 to 1.3 migration notes](docs/releases/1.3-migration.md)
 - [1.3.0 release notes](docs/releases/1.3-release-notes.md)
 - [1.4 roadmap](docs/roadmap/1.4.md)

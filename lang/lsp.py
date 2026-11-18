@@ -213,6 +213,21 @@ def analyze_document(source: str) -> list[dict[str, Any]]:
     blocks: list[tuple[str, int]] = []
     record_types: set[str] = set()
 
+    # Discover record names first so forward references resolve consistently.
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            parts = _split(line)
+        except SyntaxError:
+            continue
+        if (
+            len(parts) >= 3 and parts[:2] == ["record", "define"]
+            and _IDENTIFIER.fullmatch(parts[2])
+        ):
+            record_types.add(parts[2])
+
     for line_number, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -332,23 +347,28 @@ def analyze_document(source: str) -> list[dict[str, Any]]:
             code = "unknown-command"
             error = f"Unknown command: {command}"
         elif command == "define":
+            equal_index = next(
+                (index for index in range(2, len(parts)) if parts[index] == "="),
+                -1,
+            )
             if (
-                len(parts) < 6 or parts[1] != "var"
-                or not parts[2].endswith(":") or parts[4] != "="
+                len(parts) < 4 or parts[1] != "var"
+                or not parts[2].endswith(":") or equal_index < 3
             ):
                 error = "Usage: define var <name>: <type> = <value>"
             elif not parts[2][:-1].isidentifier():
                 error = "Variable name must be an identifier."
             else:
+                type_source = " ".join(parts[3:equal_index])
                 try:
-                    value_type = parse_type(" ".join(parts[3:parts.index("=")]))
+                    value_type = parse_type(type_source)
                 except ValueError:
                     value_type = None
                 if value_type is None or not is_known_type(
                     value_type, set(record_types)
                 ):
                     code = "unknown-type"
-                    error = f"Unknown type: {' '.join(parts[3:parts.index('=')])}"
+                    error = f"Unknown type: {type_source}"
         elif command == "compare":
             if len(parts) < 4:
                 error = "Usage: compare <expression> <bool_variable>"
@@ -381,16 +401,34 @@ def analyze_document(source: str) -> list[dict[str, Any]]:
         elif command == "record":
             if len(parts) < 3 or parts[1] not in ("define", "create"):
                 error = (
-                    "Usage: record define <name> <field>:<type>... or "
+                    "Usage: record define <name> <field>:<type>[=<default>]... or "
                     "record create <type> <variable> <field-value>..."
                 )
-            elif parts[1] == "define" and (
-                len(parts) < 4
-                or any(declaration.count(":") != 1 for declaration in parts[3:])
-            ):
-                error = "Record fields must use <field>:<type> syntax."
+            elif parts[1] == "define" and len(parts) < 4:
+                error = "A record must define at least one field."
             elif parts[1] == "define":
-                record_types.add(parts[2])
+                for declaration in parts[3:]:
+                    field_name, separator, type_source = declaration.partition(":")
+                    type_source = type_source.partition("=")[0]
+                    if (
+                        not separator or not _IDENTIFIER.fullmatch(field_name)
+                        or not type_source
+                    ):
+                        error = (
+                            "Record fields must use "
+                            "<field>:<type>[=<default>] syntax."
+                        )
+                        break
+                    try:
+                        field_type = parse_type(type_source)
+                    except ValueError:
+                        field_type = None
+                    if field_type is None or not is_known_type(
+                        field_type, set(record_types)
+                    ):
+                        code = "unknown-type"
+                        error = f"Unknown type: {type_source}"
+                        break
             elif parts[1] == "create" and len(parts) < 4:
                 error = "Usage: record create <type> <variable> <field-value>..."
             elif parts[1] == "create" and parts[2] not in record_types:
@@ -713,12 +751,126 @@ def _project_modules(
     return modules, diagnostics
 
 
+_INDEX_EXCLUDED_DIRECTORIES = frozenset({
+    ".git", ".yuba", "__pycache__", "node_modules", ".venv", "venv", "env",
+})
+_MAX_INDEXED_SOURCE_BYTES = 1_048_576
+
+
+def _top_level_names(source: str) -> set[str]:
+    """Return top-level declarations, which are safe to match workspace-wide."""
+    names: set[str] = set()
+    for line in source.splitlines():
+        if not line or line[0].isspace() or line.lstrip().startswith("#"):
+            continue
+        try:
+            parts = _split(line.strip())
+        except SyntaxError:
+            continue
+        if len(parts) >= 3 and parts[:2] == ["define", "var"]:
+            names.add(parts[2].removesuffix(":"))
+        definition = _function_definition(parts)
+        if definition is not None:
+            names.add(definition[0])
+        if len(parts) >= 3 and parts[:2] == ["record", "define"]:
+            names.add(parts[2])
+    return names
+
+
 class LanguageServer:
     def __init__(self) -> None:
         self.documents: dict[str, str] = {}
         self.document_versions: dict[str, int] = {}
+        self.workspace_roots: list[Path] = []
+        self.workspace_cache: dict[Path, tuple[int, str]] = {}
         self.shutdown_requested = False
         self.exit_requested = False
+
+    def _set_workspace_roots(self, params: dict[str, Any]) -> None:
+        roots: list[Path] = []
+        for folder in params.get("workspaceFolders") or []:
+            if isinstance(folder, dict):
+                path = _file_path(str(folder.get("uri", "")))
+                if path is not None:
+                    roots.append(path)
+        if not roots:
+            for key in ("rootUri", "rootPath"):
+                value = params.get(key)
+                if isinstance(value, str) and value:
+                    path = (
+                        _file_path(value)
+                        if value.startswith("file:")
+                        else Path(value)
+                    )
+                    if path is not None:
+                        roots.append(path)
+                    break
+        self.workspace_roots = [
+            root.resolve() for root in roots if root.is_dir()
+        ]
+        self.workspace_cache.clear()
+
+    def _workspace_documents(self) -> dict[str, str]:
+        documents: dict[str, str] = {}
+        for root in self.workspace_roots:
+            try:
+                candidates = sorted(root.rglob("*.yl"))
+            except OSError:
+                continue
+            for candidate in candidates:
+                try:
+                    relative = candidate.relative_to(root)
+                except ValueError:
+                    continue
+                if any(
+                    part.startswith(".") or part in _INDEX_EXCLUDED_DIRECTORIES
+                    for part in relative.parts[:-1]
+                ):
+                    continue
+                try:
+                    resolved = candidate.resolve()
+                    stat = resolved.stat()
+                except OSError:
+                    continue
+                if not resolved.is_file() or stat.st_size > _MAX_INDEXED_SOURCE_BYTES:
+                    continue
+                cached = self.workspace_cache.get(resolved)
+                if cached is not None and cached[0] == stat.st_mtime_ns:
+                    documents[resolved.as_uri()] = cached[1]
+                    continue
+                try:
+                    text = resolved.read_text(encoding="utf-8-sig")
+                except (OSError, UnicodeError):
+                    continue
+                self.workspace_cache[resolved] = (stat.st_mtime_ns, text)
+                documents[resolved.as_uri()] = text
+        return documents
+
+    def _indexed_documents(self) -> dict[str, str]:
+        documents = self._workspace_documents()
+        documents.update(self.documents)
+        return documents
+
+    def _workspace_definitions(
+        self, name: str, exclude_uri: str
+    ) -> list[tuple[str, dict[str, int]]]:
+        definitions = []
+        for uri, source in self._indexed_documents().items():
+            if uri == exclude_uri:
+                continue
+            definition = _symbols(source).get(name)
+            if definition is not None:
+                definitions.append((uri, definition))
+        return definitions
+
+    def _invalidate_workspace_uri(self, uri: str) -> None:
+        path = _file_path(uri)
+        if path is None:
+            return
+        try:
+            self.workspace_cache.pop(path.resolve(), None)
+        except OSError:
+            self.workspace_cache.pop(path, None)
 
     def handle(
         self, message: dict[str, Any]
@@ -729,6 +881,7 @@ class LanguageServer:
         notifications: list[dict[str, Any]] = []
 
         if method == "initialize":
+            self._set_workspace_roots(params)
             result: Any = {
                 "capabilities": {
                     "textDocumentSync": {"openClose": True, "change": 1},
@@ -741,6 +894,12 @@ class LanguageServer:
                     "documentSymbolProvider": True,
                     "workspaceSymbolProvider": True,
                     "codeActionProvider": True,
+                    "workspace": {
+                        "workspaceFolders": {
+                            "supported": True,
+                            "changeNotifications": True,
+                        },
+                    },
                 },
                 "serverInfo": {"name": "YubaLANG"},
             }
@@ -754,6 +913,7 @@ class LanguageServer:
             document = params["textDocument"]
             uri, text = document["uri"], document["text"]
             self.documents[uri] = text
+            self._invalidate_workspace_uri(uri)
             if "version" in document:
                 self.document_versions[uri] = document["version"]
             notifications.append(self._publish(uri, text))
@@ -771,6 +931,7 @@ class LanguageServer:
                 for change in params["contentChanges"]:
                     text = _apply_change(text, change)
                 self.documents[uri] = text
+                self._invalidate_workspace_uri(uri)
                 if version is not None:
                     self.document_versions[uri] = version
                 notifications.append(self._publish(uri, text))
@@ -779,11 +940,18 @@ class LanguageServer:
             uri = params["textDocument"]["uri"]
             self.documents.pop(uri, None)
             self.document_versions.pop(uri, None)
+            self._invalidate_workspace_uri(uri)
             notifications.append({
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
                 "params": {"uri": uri, "diagnostics": []},
             })
+            result = None
+        elif method == "workspace/didChangeWatchedFiles":
+            for change in params.get("changes", []):
+                uri = change.get("uri")
+                if isinstance(uri, str):
+                    self._invalidate_workspace_uri(uri)
             result = None
         elif method == "textDocument/definition":
             uri = params["textDocument"]["uri"]
@@ -823,6 +991,23 @@ class LanguageServer:
                             "uri": module_path.as_uri(),
                             "range": _range(
                                 definition_line,
+                                start,
+                                start + _utf16_length(word[0]),
+                            ),
+                        }]
+                if result is None:
+                    workspace_definitions = self._workspace_definitions(
+                        word[0], uri
+                    )
+                    if len(workspace_definitions) == 1:
+                        definition_uri, workspace_definition = (
+                            workspace_definitions[0]
+                        )
+                        start = workspace_definition["character"]
+                        result = [{
+                            "uri": definition_uri,
+                            "range": _range(
+                                workspace_definition["line"],
                                 start,
                                 start + _utf16_length(word[0]),
                             ),
@@ -887,7 +1072,7 @@ class LanguageServer:
                         f"{alias}.{name}"
                         for name in _public_function_symbols(module_source)
                     )
-                for source_text in self.documents.values():
+                for source_text in self._indexed_documents().values():
                     candidates.update(_symbols(source_text))
                     candidates.update(
                         match.group(1)
@@ -955,9 +1140,15 @@ class LanguageServer:
                 _word_at(source, params["position"]["line"], params["position"]["character"])
                 if source is not None else None
             )
+            documents = self.documents
+            if (
+                source is not None and word
+                and word[0] in _top_level_names(source)
+            ):
+                documents = self._indexed_documents()
             result = (
                 _references(
-                    self.documents, word[0],
+                    documents, word[0],
                     params.get("context", {}).get("includeDeclaration", False),
                 )
                 if word else []
@@ -984,8 +1175,11 @@ class LanguageServer:
                 if not word or word[0] not in _symbols(source):
                     result = None
                 else:
+                    documents = self.documents
+                    if word[0] in _top_level_names(source):
+                        documents = self._indexed_documents()
                     edits = {}
-                    for location in _references(self.documents, word[0], True):
+                    for location in _references(documents, word[0], True):
                         edits.setdefault(location["uri"], []).append({
                             "range": location["range"], "newText": new_name,
                         })
@@ -997,7 +1191,7 @@ class LanguageServer:
             query = params.get("query", "").casefold()
             result = [
                 symbol
-                for uri, source in self.documents.items()
+                for uri, source in self._indexed_documents().items()
                 for symbol in _document_symbols(source, uri)
                 if query in symbol["name"].casefold()
             ]

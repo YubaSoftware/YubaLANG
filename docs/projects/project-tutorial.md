@@ -1,10 +1,10 @@
 # Multi-module project tutorial
 
 This tutorial builds and tests a project with a local package dependency, then
-adds a registry dependency through YubaPKG. YubaLANG 1.3 accepts manifests
-targeting runtime 1.2 or 1.3 and reads lockfile formats 1, 2, and 3. YubaPKG
-accepts both manifest versions and writes format 3, which YubaLANG 1.3 can
-read offline.
+adds a registry dependency through YubaPKG. YubaLANG 1.4 accepts manifests
+targeting runtime 1.2, 1.3, or 1.4 and reads lockfile formats 1, 2, and 3.
+YubaPKG accepts those manifest versions and writes format 3, which YubaLANG 1.4
+can read offline.
 
 ## Create the library and app
 
@@ -15,8 +15,8 @@ YubaLANG package init hello_library
 YubaLANG package init hello_app
 ```
 
-YubaLANG 1.3 creates manifests targeting runtime 1.3. Manifests targeting
-runtime 1.2 are also accepted.
+YubaLANG 1.4 creates manifests targeting runtime 1.4. Manifests targeting
+runtime 1.2 or 1.3 are also accepted.
 
 Replace `hello_library/main.yl` with:
 

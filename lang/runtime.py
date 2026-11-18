@@ -45,12 +45,18 @@ class DebugHook(Protocol):
 @dataclass
 class RecordDefinition:
     fields: dict[str, str]
+    defaults: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class RecordValue:
     record_type: str
     fields: dict[str, Any]
+
+
+class CoverageHook(Protocol):
+    def record(self, source_name: str, line_number: int) -> None:
+        ...
 
 
 @dataclass
@@ -77,6 +83,7 @@ class Runtime:
     )
     closure_counter: int = 0
     records: dict[str, RecordDefinition] = field(default_factory=dict)
+    record_type_names: set[str] = field(default_factory=set)
     native_libraries: dict[str, Any] = field(default_factory=dict)
     native_functions: dict[str, Callable[..., Any]] = field(default_factory=dict)
     project_root: Path | None = None
@@ -91,10 +98,14 @@ class Runtime:
     function_scope_starts: list[int] = field(default_factory=list)
     function_call_depth: int = 0
     open_files: list[IOBase] = field(default_factory=list)
+    resources: list[Any] = field(default_factory=list)
+    _closed_resource_ids: set[int] = field(default_factory=set, repr=False)
     exception_capture_depth: int = 0
     call_stack: list[tuple[str, str, int]] = field(default_factory=list)
     current_location: tuple[str, int] = ("<memory>", 1)
     debugger: DebugHook | None = None
+    coverage: CoverageHook | None = None
+    function_invoker: Callable[[str, list[Any], dict[str, Any] | None], Any] | None = None
 
     def resolve_function(self, name: str) -> str | None:
         if "." in name:
@@ -162,36 +173,85 @@ class Runtime:
             self.scopes = scopes
             self.function_scope_starts = function_scope_starts
 
+    def register_resource(self, resource: Any) -> None:
+        """Track a resource with a ``close`` method for deterministic cleanup."""
+        if not hasattr(resource, "close"):
+            raise TypeError("Resources must provide a close() method.")
+        self._closed_resource_ids.discard(id(resource))
+        if not any(tracked is resource for tracked in self.resources):
+            self.resources.append(resource)
+
     def register_file(self, file_obj: IOBase) -> None:
-        self.open_files.append(file_obj)
+        if not any(opened is file_obj for opened in self.open_files):
+            self.open_files.append(file_obj)
+        self.register_resource(file_obj)
+
+    def close_resource(self, resource: Any) -> None:
+        """Close one tracked resource and stop tracking it."""
+        self.resources = [
+            tracked for tracked in self.resources if tracked is not resource
+        ]
+        if isinstance(resource, IOBase):
+            self.open_files = [
+                opened for opened in self.open_files if opened is not resource
+            ]
+        identifier = id(resource)
+        if identifier in self._closed_resource_ids:
+            return
+        if getattr(resource, "closed", False):
+            self._closed_resource_ids.add(identifier)
+            return
+        close = getattr(resource, "close", None)
+        if close is None:
+            raise TypeError("Resources must provide a close() method.")
+        close()
+        self._closed_resource_ids.add(identifier)
 
     def close_file(self, file_obj: IOBase) -> None:
-        file_obj.close()
-        self.open_files = [opened for opened in self.open_files if opened is not file_obj]
+        self.close_resource(file_obj)
 
-    def close_files(self) -> None:
-        files = list(self.open_files)
-        self.open_files.clear()
-        files.extend(
+    def close_resources(self) -> None:
+        """Close tracked resources in reverse registration order.
+
+        Every resource is attempted even when an earlier close fails. The first
+        error is raised after all cleanup has been attempted, matching the
+        runtime's deterministic-exit behavior.
+        """
+        resources = list(reversed(self.resources))
+        resources.extend(
             variable["value"]
             for scope in self.scopes
             for variable in scope.values()
-            if variable["type"] == "file" and isinstance(variable["value"], IOBase)
+            if variable["type"] in ("file", "iterator")
+            and hasattr(variable["value"], "close")
+            and not any(
+                tracked is variable["value"] for tracked in resources
+            )
         )
+        self.resources.clear()
+        self.open_files.clear()
         closed_ids: set[int] = set()
-        first_error: OSError | None = None
-        for file_obj in files:
-            if id(file_obj) in closed_ids:
+        first_error: BaseException | None = None
+        for resource in resources:
+            identifier = id(resource)
+            if (
+                identifier in closed_ids
+                or identifier in self._closed_resource_ids
+            ):
                 continue
-            closed_ids.add(id(file_obj))
+            closed_ids.add(identifier)
             try:
-                if not file_obj.closed:
-                    file_obj.close()
-            except OSError as error:
+                if not getattr(resource, "closed", False):
+                    resource.close()
+                self._closed_resource_ids.add(identifier)
+            except BaseException as error:  # cleanup must attempt every resource
                 if first_error is None:
                     first_error = error
         if first_error is not None:
             raise first_error
+
+    def close_files(self) -> None:
+        self.close_resources()
 
     def update_var(self, name: str, var_type: str, value: Any) -> None:
         start = self.function_scope_starts[-1] if self.function_scope_starts else 0
@@ -290,7 +350,9 @@ class Runtime:
         )
 
     def type_is_known(self, type_name: str) -> bool:
-        return is_known_type(parse_type(type_name), set(self.records))
+        return is_known_type(
+            parse_type(type_name), set(self.records) | self.record_type_names
+        )
 
     @staticmethod
     def type_name(value: Any) -> str:

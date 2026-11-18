@@ -1,82 +1,47 @@
 # YubaLANG 1.4 roadmap
 
-This is a proposed planning checklist, not a commitment that every candidate
-will ship in 1.4. Promote a candidate into the release scope only after its
-design, compatibility impact, and implementation size are understood. Keep
-YubaLANG runtime responsibilities separate from YubaPKG package resolution
-and installation.
+This checklist records the accepted 1.4 work and the candidates that remain
+deferred. Keep YubaLANG runtime responsibilities separate from YubaPKG package
+resolution and installation. The full roadmap is in
+[docs/roadmap/1.4.md](docs/roadmap/1.4.md).
 
-## Release foundations
+## Shipped
 
-- [ ] Agree on the 1.4 scope and publish the accepted feature set before
-  implementation.
-- [ ] Review open defects and user requests; prioritize by impact and
-  reproducibility rather than adding speculative syntax.
-- [ ] Turn every documented language rule and built-in into executable
-  conformance tests, including negative cases and source diagnostics.
-- [ ] Verify language, runtime, formatter, test runner, and LSP behavior
-  together for every accepted language change.
-- [ ] Run the complete test suite and release smoke tests on supported
-  Windows, Linux, and macOS targets.
-- [ ] Update the 1.4 language reference, master reference, migration notes,
-  examples, and release notes for all shipped changes.
-- [ ] Publish release artifacts and checksums, and verify clean installation,
-  project restore/import, tests, formatting, LSP startup, and supported
-  native-interoperability scenarios.
+- [x] Expression function calls: simple/qualified names, positional and named
+  arguments, nested calls, with receiver/index and unpacking limits documented.
+- [x] Record field defaults and named construction, including per-construction
+  defaults and construction diagnostics.
+- [x] Forward record field types, resolved against records declared later in
+  the same source file.
+- [x] Static analysis for forward records, record construction, union values,
+  optional conditions, expression-call results, and multi-token annotations.
+- [x] Deterministic resource protocol with reverse-order cleanup, every-resource
+  attempts, first-error reporting, and automatic file tracking.
+- [x] `YubaLANG debug` frontend with breakpoints, stepping, stack, variables,
+  source listing, and quit.
+- [x] Opt-in `YubaLANG test --coverage` with a side channel and additive JSON.
+- [x] Cached LSP workspace index with safe top-level references and rename.
+- [x] Editor setup documentation and automated LSP protocol/index tests.
+- [x] Manifest compatibility for runtime 1.2, 1.3, and 1.4; new projects target
+  1.4; compatibility matrix and package tests updated.
+- [x] Versioned reference, master reference, migration notes, release notes,
+  installation and tool guides updated.
+- [ ] Manual desktop-editor LSP smoke test (automated stdio tests pass).
 
-## Feature candidates
+## Deferred with documented rationale
 
-### Language and data model
-
-- [ ] Design record methods, default field values, and construction rules.
-  Specify receiver semantics, mutation, visibility, equality, and
-  compatibility before choosing syntax.
-- [ ] Improve static type analysis where it can provide reliable value:
-  document inference limits, add focused rules, and test that diagnostics do
-  not reject valid dynamic programs.
-- [ ] Evaluate richer expression forms, such as function calls in
-  expressions, only with a grammar proposal and compatibility tests; current
-  function calls remain commands.
-
-### Runtime and resource lifecycle
-
-- [ ] Design a general deterministic resource-lifecycle protocol before
-  adding APIs that return resources or resource-backed iterators.
-- [ ] Decide whether concurrency and asynchronous I/O address concrete user
-  needs. If accepted, first specify cancellation, error propagation,
-  scheduling, and shared mutable state; implement async APIs only after those
-  semantics are testable.
-
-### Developer experience
-
-- [ ] Evaluate an interactive debugger frontend over the existing debugger
-  hooks, including stepping, breakpoints, stack inspection, and variables.
-- [ ] Evaluate source-level test coverage instrumentation and report format;
-  the current process-based output test runner does not collect coverage.
-- [ ] Evaluate an LSP workspace index for unopened files, including indexing
-  performance, invalidation, and rename safety.
-- [ ] Verify the language server in at least one real editor and document the
-  supported setup.
-
-### Projects and distribution
-
-- [ ] Gather concrete use cases for building or bundling applications with
-  generated code or native dependencies; define reproducibility and platform
-  requirements before designing a command.
-- [ ] Keep registry resolution and installation in YubaPKG. If the
-  YubaLANG/YubaPKG interface changes, update the compatibility matrix and
-  cross-tool integration tests.
-
-## Explicitly gated work
-
-- Bytecode or compiler targets are not a 1.4 goal by default. Reconsider only
-  if representative benchmarks or distribution requirements demonstrate a
-  measurable need.
-- Class-based object orientation, inheritance, and a non-C plugin system are
-  not assumed. Require concrete use cases and a separate semantics and safety
-  proposal before adding them.
-- Broader native FFI types are not assumed. Any proposal must specify ABI
-  behavior, ownership, platform support, and process-safety limitations.
+- [ ] Record methods, inheritance, and code-running constructors: require a
+  receiver, mutation, visibility, equality, and compatibility proposal.
+- [ ] Concurrency and asynchronous I/O: require cancellation, error
+  propagation, scheduling, and shared-state semantics.
+- [ ] Build/bundle command: requires concrete generated-code and native
+  dependency use cases plus reproducibility and platform requirements.
+- [ ] Bytecode or compiler targets: require representative benchmarks or
+  distribution needs.
+- [ ] Class-based inheritance, non-C plugins, and broader native FFI: require
+  concrete use cases, ABI/ownership rules, platform support, and process-safety
+  limits.
+- [ ] Registry resolution and installation: remain a YubaPKG responsibility.
 
 ## Completion criteria
 
@@ -84,6 +49,3 @@ A 1.4 change is complete only when its behavior is specified, tested,
 documented in the versioned and master references, covered by migration
 guidance when compatibility is affected, and validated on the platforms
 required by its scope.
-
-See the [long-term YubaLANG feature backlog](docs/roadmap/features.md) for
-candidates that may fall outside 1.4.

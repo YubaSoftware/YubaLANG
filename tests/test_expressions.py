@@ -6,6 +6,7 @@ from lang.expressions import evaluate_expression, parse_expression
 from lang.interpreter import Runtime, execute_lines
 from lang.lsp import analyze_document
 from lang.syntax import parse_program
+from lang.typecheck import check_types
 
 
 class ExpressionTests(unittest.TestCase):
@@ -24,9 +25,66 @@ class ExpressionTests(unittest.TestCase):
             evaluate_expression("1 and true", runtime)
 
     def test_only_supported_expression_syntax_is_accepted(self):
-        for source in ("f()", "1 if true else 0", "x.y"):
+        for source in (
+            "1 if true else 0",
+            "x.y",
+            "values[0]",
+            "f(*args)",
+            "f(**kwargs)",
+            "(f() for x in values)",
+            "range()",
+            "range(1, 2, 3, 4)",
+            "range(start=1)",
+        ):
             with self.subTest(source=source), self.assertRaises(SyntaxError):
                 parse_expression(source)
+
+    def test_function_calls_are_supported_in_expressions(self):
+        output = io.StringIO()
+        source = [
+            "func define double value:int -> int",
+            "    return value * 2",
+            "endfunc",
+            "define var total: int = double(3) + double(4)",
+            "define var named: int = double(value=5)",
+            "text output double(total)",
+            "define var squares: list[int] = [double(x) for x in range(3)]",
+            "text output squares",
+        ]
+        with contextlib.redirect_stdout(output):
+            execute_lines(source, source_name="calls.yl")
+
+        self.assertEqual(output.getvalue(), "28\n[0, 2, 4]\n")
+
+    def test_expression_calls_report_missing_functions_and_arguments(self):
+        runtime = Runtime()
+        with self.assertRaisesRegex(ValueError, "is not defined"):
+            evaluate_expression("missing(1)", runtime)
+        execute_lines(
+            [
+                "func define greet name",
+                "    return name",
+                "endfunc",
+            ],
+            runtime,
+        )
+        with self.assertRaisesRegex(TypeError, "expects 1 argument"):
+            evaluate_expression("greet()", runtime)
+
+    def test_static_checker_infers_expression_call_results(self):
+        self.assertEqual(
+            check_types(
+                [
+                    "func define double value:int -> int",
+                    "    return value * 2",
+                    "endfunc",
+                    'define var invalid: string = ""',
+                    "set invalid = double(2)",
+                ]
+            ),
+            [(4, "Type mismatch: assignment has type 'int' but variable "
+                 "'invalid' has type 'string'.")],
+        )
 
     def test_f_strings_and_list_comprehensions(self):
         runtime = Runtime()
@@ -133,9 +191,18 @@ class ExpressionTests(unittest.TestCase):
         )
         diagnostics = analyze_document(
             "define var value: int = 0\n"
-            "set value = open('file')\n"
+            "set value = 1 if true else 0\n"
         )
         self.assertTrue(any("Unsupported syntax" in item["message"] for item in diagnostics))
+        self.assertEqual(
+            analyze_document(
+                "func define double value:int -> int\n"
+                "    return value * 2\n"
+                "endfunc\n"
+                "define var total: int = double(2) + 1\n"
+            ),
+            [],
+        )
 
     def test_static_checker_infers_expression_results(self):
         diagnostics = analyze_document(

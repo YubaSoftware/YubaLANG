@@ -97,7 +97,7 @@ def execute_command(
                 _create_record(parts, runtime)
                 return
             raise SyntaxError(
-                "Usage: record define <name> <field>:<type>... or "
+                "Usage: record define <name> <field>:<type>[=<default>]... or "
                 "record create <type> <variable> <field-value>..."
             )
         name = parts[2]
@@ -106,16 +106,26 @@ def execute_command(
         if len(parts) < 4:
             raise SyntaxError("A record must define at least one field.")
         fields: dict[str, str] = {}
+        defaults: dict[str, str] = {}
         for declaration in parts[3:]:
-            if declaration.count(":") != 1:
-                raise SyntaxError("Record fields must use <field>:<type> syntax.")
+            if ":" not in declaration:
+                raise SyntaxError(
+                    "Record fields must use <field>:<type>[=<default>] syntax."
+                )
             field_name, field_type = declaration.split(":", 1)
+            field_type, default_separator, default_source = field_type.partition("=")
             if not field_name.isidentifier() or field_name in fields:
                 raise ValueError(f"Invalid or duplicate record field '{field_name}'.")
+            if default_separator and not default_source:
+                raise SyntaxError(
+                    f"Default value for record field '{field_name}' is missing."
+                )
             if not runtime.type_is_known(field_type):
                 raise ValueError(f"Unknown type: {field_type}")
             fields[field_name] = format_type(parse_type(field_type))
-        runtime.records[name] = RecordDefinition(fields)
+            if default_separator:
+                defaults[field_name] = default_source
+        runtime.records[name] = RecordDefinition(fields, defaults)
         return
 
     if command == "assert":
@@ -416,21 +426,85 @@ def _execute_attribute_command(parts: list[str], runtime: Runtime) -> None:
 
 def _create_record(parts: list[str], runtime: Runtime) -> None:
     if len(parts) < 4:
-        raise SyntaxError("Usage: record create <type> <variable> <field-value>...")
+        raise SyntaxError(
+            "Usage: record create <type> <variable> <field-value>..."
+        )
     if parts[2] not in runtime.records:
         raise ValueError(f"Unknown record type: {parts[2]}")
     record_type, variable_name = parts[2], parts[3]
     definition = runtime.records[record_type]
     field_names = list(definition.fields)
-    values = parts[4:]
-    if len(values) != len(field_names):
+
+    positional: list[str] = []
+    named: dict[str, str] = {}
+    saw_named = False
+    for token in parts[4:]:
+        field_name, separator, value = token.partition("=")
+        if separator and field_name.isidentifier():
+            if not value:
+                raise SyntaxError(
+                    f"Missing value for named record field '{field_name}'."
+                )
+            saw_named = True
+            if field_name in named:
+                raise TypeError(
+                    f"Record '{record_type}' got field '{field_name}' more than once."
+                )
+            named[field_name] = value
+        else:
+            if saw_named:
+                raise SyntaxError(
+                    "Positional record field values must come before named fields."
+                )
+            positional.append(token)
+
+    if len(positional) > len(field_names):
         raise TypeError(
             f"Record '{record_type}' expects {len(field_names)} field value(s), "
-            f"but got {len(values)}."
+            f"but got {len(positional)} positional value(s)."
         )
-    fields = {}
-    for field_name, token in zip(field_names, values):
-        value = resolve(token, runtime)
+    assigned: dict[str, str] = dict(zip(field_names, positional))
+    for field_name in named:
+        if field_name not in definition.fields:
+            raise TypeError(
+                f"Record '{record_type}' has no field named '{field_name}'."
+            )
+        if field_name in assigned:
+            raise TypeError(
+                f"Record '{record_type}' got field '{field_name}' more than once."
+            )
+        assigned[field_name] = named[field_name]
+    missing = [
+        field_name for field_name in field_names
+        if field_name not in assigned and field_name not in definition.defaults
+    ]
+    if missing:
+        raise TypeError(
+            f"Record '{record_type}' is missing required field(s): "
+            f"{', '.join(missing)}."
+        )
+
+    values: dict[str, Any] = {}
+    for field_name, token in assigned.items():
+        values[field_name] = resolve(token, runtime)
+    for field_name in field_names:
+        if field_name in values:
+            continue
+        try:
+            values[field_name] = parse_value(
+                definition.defaults[field_name],
+                definition.fields[field_name],
+                runtime,
+            )
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                f"Field '{field_name}' of record '{record_type}' "
+                f"requires type '{definition.fields[field_name]}'."
+            ) from error
+
+    fields: dict[str, Any] = {}
+    for field_name in field_names:
+        value = values[field_name]
         expected_type = definition.fields[field_name]
         if not runtime.value_matches_type(expected_type, value):
             raise TypeError(

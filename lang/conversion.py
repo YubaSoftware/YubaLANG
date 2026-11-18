@@ -1,6 +1,6 @@
 from typing import Any
 
-from .runtime import TYPES, Runtime
+from .runtime import TYPES, RecordValue, Runtime
 from .expressions import evaluate_expression
 from .type_system import FunctionReference, format_type, parse_type
 
@@ -141,6 +141,14 @@ def parse_value(value: str, expected_type: str, runtime: Runtime) -> Any:
         if data["type"] != expected_type:
             raise TypeError(f"Variable '{value}' is not a {expected_type}.")
         return data["value"]
+    if expected_type in runtime.records:
+        if (
+            data is not None
+            and data["type"] == expected_type
+            and isinstance(data["value"], RecordValue)
+        ):
+            return data["value"]
+        raise TypeError(f"Expected a '{expected_type}' record variable.")
     raise ValueError(f"Unable to parse value '{value}' for type '{expected_type}'.")
 
 

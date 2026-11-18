@@ -21,8 +21,8 @@ irm https://raw.githubusercontent.com/yubalang/yubalang/main/installers/windows/
 
 The installers download the latest GitHub release, verify the SHA-256 checksum,
 and install or replace the executable. To install a specific tag, download the
-corresponding installer script and pass `--version v1.3.0` on macOS/Linux or
-`-Version v1.3.0` on Windows. Re-running the installer updates an existing
+corresponding installer script and pass `--version v1.4.0` on macOS/Linux or
+`-Version v1.4.0` on Windows. Re-running the installer updates an existing
 installation.
 
 The Unix installer installs to `~/.local/bin` by default. If that directory is
@@ -52,14 +52,16 @@ Building a native C library for the FFI examples also requires a platform C
 compiler.
 The test command discovers `*.yl` files in `tests/cases` by default; each test
 needs a sibling `<name>.expected.txt` file containing its exact expected
-standard output. Use `--filter PATTERN` to run matching test names and `--json`
-for structured results and failure details. Tests are non-interactive and do
-not provide setup/teardown hooks.
+standard output. Use `--filter PATTERN` to run matching test names, `--json`
+for structured results and failure details, and `--coverage` for opt-in
+source-line coverage. Tests are non-interactive and do not provide
+setup/teardown hooks.
 
-The runner compares process output and does not report statement or function
-coverage. Each test runs in a separate interpreter process, and the runtime
-does not expose source-level execution counters; coverage percentages would
-be misleading until those counters are available.
+With `--coverage`, the runner collects per-file executable-line hit counts from
+the interpreter's side channel and adds a text percentage summary and per-file
+uncovered lines, or a `coverage` object in JSON output. Coverage is off by
+default; the default output comparison and JSON report are unchanged. Blank
+lines, comments, and block terminators are not counted as executable.
 
 `YubaLANG run [project-directory]` executes the manifest entry point and
 validates installed dependencies against the lockfile. `YubaLANG repl` starts
@@ -84,7 +86,7 @@ checks globally.
 
 ## Build pipeline
 
-Push a version tag such as `v1.3.0` to build and publish the four platform
+Push a version tag such as `v1.4.0` to build and publish the four platform
 archives. The release workflow selects Python 3.12 and pins the PyInstaller
 build dependencies, fixes the source timestamp and Python hash seed, verifies
 that two builds of each executable on the same runner are byte-identical, and
@@ -105,4 +107,4 @@ and macOS with Python 3.10 through 3.14. CI checks formatting for runnable
 examples and test fixtures, and builds and smoke-tests a standalone executable
 on Ubuntu. The packaged-executable smoke test initializes a project, restores
 and checks its lockfile, imports a local module, runs the project and test
-fixtures, and verifies formatting and LSP startup.
+fixtures, collects test coverage, and verifies formatting and LSP startup.

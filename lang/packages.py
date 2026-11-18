@@ -15,8 +15,8 @@ LOCK_NAME = "yuba.lock.json"
 LOCK_VERSION = 2
 REGISTRY_LOCK_VERSION = 3
 SUPPORTED_LOCK_VERSIONS = frozenset({1, LOCK_VERSION, REGISTRY_LOCK_VERSION})
-SUPPORTED_YUBALANG = "1.3"
-COMPATIBLE_YUBALANG_VERSIONS = {"1.2", SUPPORTED_YUBALANG}
+SUPPORTED_YUBALANG = "1.4"
+COMPATIBLE_YUBALANG_VERSIONS = {"1.2", "1.3", SUPPORTED_YUBALANG}
 PACKAGE_CACHE = Path(".yuba") / "packages"
 _PACKAGE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 _COMMIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -60,9 +60,10 @@ def read_manifest(root: Path) -> dict[str, Any]:
         if not isinstance(data.get(field), str) or not data[field]:
             raise PackageError(f"Manifest '{path}' requires a non-empty '{field}' string.")
     if data["yubalang"] not in COMPATIBLE_YUBALANG_VERSIONS:
+        supported = ", ".join(sorted(COMPATIBLE_YUBALANG_VERSIONS))
         raise PackageError(
             f"Manifest '{path}' requires YubaLANG {data['yubalang']}; "
-            f"this runtime supports 1.2 and {SUPPORTED_YUBALANG}."
+            f"this runtime supports {supported}."
         )
     dependencies = data.setdefault("dependencies", {})
     if not isinstance(dependencies, dict):
