@@ -6,6 +6,10 @@ annotations, runtime, modules, package workflow, formatter, test runner and
 coverage, debugger, language server, and native C interface. The focused guides
 linked below provide additional installation and operational detail.
 
+YubaLANG 1.4 is still in progress, so this reference covers implemented behavior
+only. Planned 1.4 work is in the [1.4 roadmap](roadmap/1.4.md), and the next
+release is planned in the [1.5 roadmap](roadmap/1.5.md).
+
 ## Contents
 
 - [Running YubaLANG](#running-yubalang)

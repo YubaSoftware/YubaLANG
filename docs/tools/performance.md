@@ -58,3 +58,8 @@ In one local microbenchmark of 10,000 repeated no-op function calls, cached
 tokenization took about 14 ms versus about 70 ms without the cache. This
 measures a narrow, repeated-source workload; use the harness on representative
 programs before drawing broader conclusions.
+
+The [1.5 roadmap](../roadmap/1.5.md) makes this harness the baseline for the
+interpreter-speed, profiling, and bytecode milestones. Its speed targets are
+provisional until the 1.4 baseline is recorded here with the exact machine and
+command used.

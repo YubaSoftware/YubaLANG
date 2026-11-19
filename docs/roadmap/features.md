@@ -1,9 +1,10 @@
 # YubaLANG feature backlog
 
-This backlog tracks capability areas beyond the current 1.4 baseline. It is a
-planning aid, not a promise or a claim that every programming language needs
-every item. The 1.4 release candidates are collected in the
-[1.4 roadmap](1.4.md). Select work based on concrete user needs, clear
+This backlog tracks capability areas that are not scheduled in the current
+release plans. It is a planning aid, not a promise, and not every programming
+language needs every item. Scheduled work lives in the [1.4 roadmap](1.4.md)
+and the [1.5 roadmap](1.5.md); the canonical 1.4 checklist is
+[todo.md](../../todo.md). Select new work based on concrete user needs, clear
 semantics, compatibility, and maintainability.
 
 ## Current baseline
@@ -23,59 +24,94 @@ regression and conformance tests:
   debugger, and stdio language server with a workspace index.
 - [x] Narrow C ABI calls and standalone executable releases.
 
+Items scheduled elsewhere are intentionally not repeated here:
+
+- Language ergonomics, types and diagnostics, standard-library expansion, and
+  tooling completeness: [1.4 roadmap](1.4.md).
+- Interpreter speed, bytecode execution, profiling, concurrency and async I/O,
+  and FFI v2: [1.5 roadmap](1.5.md).
+- Application build/bundle commands: deferred to 1.6, after the 1.5 performance
+  and FFI work is measured.
+
 ## Core language and type system
 
-- [ ] Specify and add conformance tests for every documented syntax rule,
-  built-in, type rule, and diagnostic, including invalid programs.
-- [ ] Identify high-value gaps in static inference and diagnostics; improve
-  them incrementally without requiring dynamic programs to be fully typed.
-- [ ] Define whether records need methods or richer constructors; specify
-  receiver, visibility, initialization, aliasing, and equality semantics
-  before implementation.
-- [ ] Add a language-level resource type or iterator cleanup syntax only if new
-  resource-bearing APIs need it beyond the runtime's general resource protocol.
+- [ ] Evaluate class-based inheritance and richer object models only after the
+  1.4 record-method and constructor work has real usage data.
+- [ ] Extend pattern matching with guards, map/record patterns, and binding
+  patterns once the 1.4 base is established.
+- [ ] Define metaprogramming or macro facilities only for concrete
+  code-generation needs that cannot be met by generators or functions.
+- [ ] Consider multiple return values or richer destructuring if real programs
+  repeatedly pack tuples.
+- [ ] Separate a formal language specification from the implementation reference
+  and keep conformance fixtures as the executable source of truth.
+- [ ] Consider deep immutability or freeze operations if shared mutable records
+  cause recurring defects.
 
-## Concurrency and asynchronous I/O
+## Concurrency and distributed execution
 
-- [ ] Collect use cases that require concurrent or asynchronous programs.
-- [ ] If justified, define task scheduling, cancellation, failure propagation,
-  shared-state rules, and interaction with the synchronous runtime.
-- [ ] Add concurrency primitives and asynchronous standard-library APIs only
-  after those semantics can be covered by deterministic tests.
+- [ ] Evaluate shared-memory parallelism only after single-threaded async
+  semantics are stable and measured.
+- [ ] Consider multi-process or distributed runtimes only with a concrete
+  workload, failure model, and serialization design.
+- [ ] Consider async server frameworks only after core async I/O and lifecycle
+  limits are proven.
+- [ ] Evaluate transactional or actor-style state management if shared mutable
+  state remains the common source of async bugs.
 
 ## Developer tools and testing
 
-- [ ] Verify language-server interoperability in a real desktop editor and
-  record the tested client configuration. The stdio protocol and workspace
-  index are covered by automated tests.
-- [ ] Expand conformance and negative tests alongside each accepted language
-  or runtime feature; keep examples runnable in CI.
+- [ ] Verify the language server across a wider editor matrix (VS Code, Neovim,
+  Helix, and a JetBrains client) and record each tested configuration.
+- [ ] Add remote or attach debugging for long-running processes if embedding
+  hosts require it.
+- [ ] Consider record/replay or time-travel debugging only with a deterministic
+  runtime trace format.
+- [ ] Consider incremental test selection or impact analysis for large projects.
+- [ ] Add richer snapshot-testing workflows beyond golden output if real suites
+  need them.
 
 ## Projects, packaging, and native integrations
 
-- [ ] Gather requirements for project build or application-bundle commands,
-  especially generated code, native dependencies, platform targets, and
-  reproducibility.
-- [ ] Keep dependency resolution and downloads in YubaPKG; coordinate
-  manifest, lockfile, and installed-layout changes through the published
+- [ ] Implement application build/bundle commands in 1.6 for generated code,
+  native dependencies, assets, reproducible inputs, and platform artifacts.
+- [ ] Generate C bindings from headers or a declaration file once FFI v2 types
+  are stable.
+- [ ] Add signed artifact and provenance checks for packages and release
+  binaries; coordinate metadata and registry behavior with YubaPKG.
+- [ ] Evaluate non-C extension mechanisms only if a concrete integration need
+  cannot be met through the extended C ABI.
+- [ ] Keep dependency resolution, downloads, and registry metadata ownership in
+  YubaPKG; coordinate manifest and lockfile changes through the published
   compatibility contract.
-- [ ] Consider broader FFI types only with explicit ABI, ownership,
-  error-handling, and cross-platform safety designs.
-- [ ] Consider non-C extension mechanisms only if a concrete integration
-  need cannot be met through the documented C ABI.
+- [ ] Consider package documentation hosting or generated API indexes for the
+  ecosystem; registry storage remains YubaPKG's responsibility.
 
 ## Performance and implementation strategy
 
-- [ ] Continue measuring representative workloads before changing interpreter
-  architecture.
-- [ ] Revisit bytecode, compilation, or caching only when measurements show a
-  meaningful benefit and invalidation and distribution can be made reliable.
+- [ ] Evaluate a JIT only if the 1.5 bytecode engine saturates and measurements
+  show a further repeatable win.
+- [ ] Parallelize bytecode compilation for multi-file projects if build latency
+  becomes the dominant cost.
+- [ ] Add incremental compilation artifacts for large projects if the 1.5 cache
+  design does not cover them.
+- [ ] Continue reducing interpreter memory and allocation churn after the 1.5
+  speed work, with tracked workloads and no unmeasured rewrites.
+- [ ] Revisit runtime data-structure choices only with profiles that show a
+  specific bottleneck.
 
-## Governance and release quality
+## Ecosystem and governance
 
-- [ ] Record motivation, alternatives, compatibility impact, and tests for
-  proposed syntax and runtime changes.
+- [ ] Build a versioned documentation site with search and per-release archives.
+- [ ] Publish a security policy, vulnerability reporting process, and supported
+  version window.
+- [ ] Execute the deprecation policy consistently: name replacements, document
+  migration, and remove only after the promised window.
+- [ ] Automate release packaging, smoke tests, and checksum publication for every
+  supported platform.
+- [ ] Define a long-term-support cadence if commercial or institutional users
+  require one.
+- [ ] Keep claims about security boundaries, performance, platform support, and
+  package compatibility tied to verified behavior.
 - [ ] For each release, maintain versioned reference docs, migration guidance,
   examples, cross-platform tests, and an accurate compatibility matrix.
-- [ ] Keep claims about security boundaries, performance, platform support,
-  and package compatibility tied to verified behavior.

@@ -4,7 +4,9 @@ Use this page to find a guide by task. The [master reference](master-reference.m
 is the consolidated reference for the current language, runtime, and tools.
 The [1.4 language reference](1.4-docs.md) describes the versioned language
 specification; consult the [1.3 to 1.4 migration notes](releases/1.4-migration.md)
-when updating code from 1.3.
+when updating code from 1.3. YubaLANG 1.4 is still in progress: the reference
+documents implemented behavior, and planned work is tracked in the
+[1.4 roadmap](roadmap/1.4.md).
 
 Supporting documents are grouped into `guides/`, `features/`, `projects/`,
 `tools/`, `setup/`, and `releases/`. The versioned language reference and
@@ -51,8 +53,11 @@ master reference remain at the top level.
 
 ## Roadmap
 
-- [YubaLANG 1.4 roadmap](roadmap/1.4.md): proposed release work and major
-  feature candidates.
+- [YubaLANG 1.4 roadmap](roadmap/1.4.md): in-progress language ergonomics,
+  diagnostics, standard-library, and tooling work. The working checklist is
+  [todo.md](../todo.md).
+- [YubaLANG 1.5 roadmap](roadmap/1.5.md): planned interpreter speed, bytecode
+  execution, async concurrency, and FFI v2.
 - [YubaLANG feature backlog](roadmap/features.md): long-term language,
   runtime, tooling, and ecosystem candidates.
 
