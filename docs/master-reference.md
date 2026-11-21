@@ -46,7 +46,8 @@ When running from a source checkout, use `py -3 YubaLANG.py` instead of
 | `YubaLANG <file.yl>` | Execute a YubaLANG source file. |
 | `YubaLANG run [project-directory] [-- arguments...]` | Execute the manifest entry point. |
 | `YubaLANG repl` | Start an interactive interpreter session. |
-| `YubaLANG check <file.yl>` | Report static diagnostics without execution. |
+| `YubaLANG check [--strict] [--deny-warnings] [--json] <file.yl>` | Report static diagnostics without execution. |
+| `YubaLANG explain <diagnostic-code>` | Explain a stable diagnostic code with an example. |
 | `YubaLANG debug [--break [file:]line]... <file.yl>` | Run with the interactive debugger. |
 | `YubaLANG fmt [--check\|--write] <file-or-directory>...` | Check or format source. |
 | `YubaLANG test [options] [file-or-directory]` | Run output-based tests. |
@@ -171,9 +172,23 @@ declared type and value.
 
 `YubaLANG check <file.yl>` runs an opt-in static analysis without executing the
 program. It diagnoses statically evident syntax and type mismatches, including
-known literal, generic, typed-function, union, record-construction, and
-expression-call cases. Dynamic or unknown values may not be diagnosed; runtime
-checks remain authoritative.
+known literal, generic, typed-function, union, record-construction,
+expression-call, comprehension, and collection-result cases. Dynamic or unknown
+values may not be diagnosed; runtime checks remain authoritative.
+
+The checker narrows optionals and unions in `if`, `elseif`, `else`, and after
+early-return branches. Equality or inequality against `none` and other literals,
+truthiness, `not`, `and`, and `or` conditions all contribute facts. A fact
+applies only until the variable is assigned or its branch ends.
+
+`check` also reports warnings: `unreachable-code` and `shadowed-variable`.
+Warnings do not fail by default. `--deny-warnings` fails when any warning is
+reported, and `--strict` enables strict-only checks (currently
+`invalid-annotation`) and also fails on warnings. Neither option changes
+execution behavior. `--json` prints a versioned `schemaVersion: 1` object with
+stable diagnostic fields. `YubaLANG explain <code>` prints the description and
+example for any code. See the [diagnostic reference](features/diagnostics.md).
+
 
 ## Expressions and literals
 
@@ -645,7 +660,9 @@ and parameters remain limited to open documents for rename safety. The index
 skips hidden and dependency directories and files larger than 1 MiB. In
 projects, the server resolves imports from the nearest manifest and checked
 lockfile without network access, and provides read-only language features for
-public dependency functions. The server does not execute source. VS Code
+public dependency functions. The server does not execute source. Diagnostics
+carry the same stable `code` values as `check --json` and use LSP severity `1`
+for errors and `2` for warnings. VS Code
 requires a generic LSP client extension. See
 [language server setup](tools/language-server.md).
 

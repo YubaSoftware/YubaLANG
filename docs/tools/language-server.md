@@ -70,7 +70,12 @@ testing requires a desktop editor session and is not automated in CI.
 
 - Open, full-document and ranged change, and close notifications.
 - Syntax diagnostics for malformed quoting, invalid or unknown commands,
-  invalid declarations, and unclosed or mismatched blocks.
+  invalid declarations, unclosed or mismatched blocks, and statically evident
+  type mismatches.
+- Warning diagnostics for unreachable code and shadowed variables, published
+  with LSP severity `2`.
+- Stable diagnostic `code` values shared with `YubaLANG check --json` and
+  `YubaLANG explain`.
 - Project import diagnostics using the nearest manifest and checked lockfile;
   dependency resolution is local and does not access the network.
 - Go to definition for declared variables, function parameters, and functions.

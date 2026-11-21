@@ -1,0 +1,4 @@
+define var count: int = 1
+if true
+    define var count: int = 2
+endif

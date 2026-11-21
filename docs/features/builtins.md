@@ -149,6 +149,9 @@ statically-detectable type mismatches without executing the file. This check
 is opt-in. It infers types from literals, declarations, and supported command
 results, including typed function references and generic literals. Unknown or
 dynamic values are left unchecked; runtime checks remain authoritative.
+`--deny-warnings` and `--strict` fail on warnings, `--json` provides stable
+machine output, and `YubaLANG explain <code>` describes any diagnostic code.
+See the [diagnostic reference](diagnostics.md).
 
 ## Assertions and runtime limits
 

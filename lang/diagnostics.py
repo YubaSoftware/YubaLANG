@@ -4,6 +4,7 @@ import difflib
 import re
 from pathlib import Path
 
+from .diagnostic_codes import code_for_runtime
 from .runtime import Runtime, TYPES
 
 
@@ -129,8 +130,9 @@ def format_diagnostic(
     shown_line = line.expandtabs(4)
     start_column = len(line[:start].expandtabs(4))
     end_column = max(start_column + 1, len(line[:end].expandtabs(4)))
+    code = code_for_runtime(error)
     output = [
-        f"{source_name}:{line_number}:{start + 1}: error: {message}",
+        f"{source_name}:{line_number}:{start + 1}: error: {message} [{code}]",
         f"  line {line_number}: {shown_line}",
         f"           {' ' * start_column}{'^' * (end_column - start_column)}",
     ]

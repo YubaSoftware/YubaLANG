@@ -1,0 +1,27 @@
+[
+  {
+    "file": "invalid_annotation.yl",
+    "strict": true,
+    "codes": ["invalid-annotation"]
+  },
+  {
+    "file": "arity.yl",
+    "codes": ["invalid-syntax"]
+  },
+  {
+    "file": "narrowing.yl",
+    "codes": ["type-mismatch"]
+  },
+  {
+    "file": "narrowing_ok.yl",
+    "codes": []
+  },
+  {
+    "file": "unreachable.yl",
+    "codes": ["unreachable-code"]
+  },
+  {
+    "file": "shadow.yl",
+    "codes": ["shadowed-variable"]
+  }
+]

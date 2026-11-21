@@ -28,6 +28,8 @@ master reference remain at the top level.
 - [Built-ins](features/builtins.md): function signatures and examples.
 - [Standard library](features/standard-library.md): bundled `std.*` modules,
   API behavior, limits, and stability policy.
+- [Diagnostics](features/diagnostics.md): stable error and warning codes,
+  severities, check modes, and JSON output.
 - [Examples](guides/examples.md): runnable programs and what each demonstrates.
 
 ## Build and maintain projects

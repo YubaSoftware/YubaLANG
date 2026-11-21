@@ -1,0 +1,11 @@
+define var value: int? = 5
+if value != none
+    define var values: list[int] = [value]
+endif
+func define normalized candidate:int? -> int
+    if candidate == none
+        return 0
+    endif
+    define var narrowed: list[int] = [candidate]
+    return 0
+endfunc

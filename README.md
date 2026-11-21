@@ -20,6 +20,7 @@ Start with the [documentation guide](docs/index.md) to choose a path.
 - [Multi-module project tutorial](docs/projects/project-tutorial.md)
 - [Formatting source files](docs/tools/formatter.md)
 - [Language server and editor setup](docs/tools/language-server.md)
+- [Diagnostics, codes, and check modes](docs/features/diagnostics.md)
 - [Installation](docs/setup/install.md)
 
 ### Interoperability and release history
@@ -35,7 +36,9 @@ Start with the [documentation guide](docs/index.md) to choose a path.
 - [YubaLANG feature backlog](docs/roadmap/features.md)
 
 From a source checkout, run `py -3 YubaLANG.py check <file.yl>` for
-non-executing syntax and statically detectable type diagnostics. For projects,
+non-executing syntax and statically detectable type diagnostics. Add `--strict`
+or `--deny-warnings` for CI, `--json` for machine output, and
+`py -3 YubaLANG.py explain <code>` for a diagnostic description. For projects,
 run `py -3 YubaLANG.py run .`; for an interactive session, run
 `py -3 YubaLANG.py repl`.
 

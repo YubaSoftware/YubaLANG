@@ -1,9 +1,11 @@
 ﻿# YubaLANG Executable
 # Copyleft 🄯 2026 YubaLANG Tecnhologies\
 
+import json
 import sys
 from pathlib import Path
 
+from lang.diagnostic_codes import explain_diagnostic
 from lang.formatter import FormatError, format_source
 from lang.interpreter import run_file
 from lang.lsp import serve
@@ -19,7 +21,12 @@ from lang.repl import run_repl
 from lang.test_runner import run_tests
 
 
-def _check_file(filename: str) -> int:
+def _check_file(
+    filename: str,
+    strict: bool = False,
+    deny_warnings: bool = False,
+    json_output: bool = False,
+) -> int:
     try:
         source = Path(filename).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeError) as error:
@@ -29,19 +36,51 @@ def _check_file(filename: str) -> int:
     from lang.lsp import analyze_document
 
     lines = source.splitlines()
-    diagnostics = analyze_document(source)
+    diagnostics = analyze_document(source, strict=strict)
+    errors = [item for item in diagnostics if item.get("severity", 1) == 1]
+    warnings = [item for item in diagnostics if item.get("severity", 1) == 2]
+
+    if json_output:
+        payload = {
+            "schemaVersion": 1,
+            "tool": "YubaLANG",
+            "file": filename,
+            "diagnostics": [
+                {
+                    "code": item.get("code", "runtime-error"),
+                    "severity": (
+                        "warning" if item.get("severity", 1) == 2 else "error"
+                    ),
+                    "message": item["message"],
+                    "line": item["range"]["start"]["line"] + 1,
+                    "column": item["range"]["start"]["character"] + 1,
+                    "endLine": item["range"]["end"]["line"] + 1,
+                    "endColumn": item["range"]["end"]["character"] + 1,
+                }
+                for item in diagnostics
+            ],
+            "summary": {
+                "errors": len(errors),
+                "warnings": len(warnings),
+            },
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 1 if errors or ((deny_warnings or strict) and warnings) else 0
+
     for diagnostic in diagnostics:
         line_number = diagnostic["range"]["start"]["line"]
         line = lines[line_number] if line_number < len(lines) else ""
         column = diagnostic["range"]["start"]["character"]
+        severity = "warning" if diagnostic.get("severity", 1) == 2 else "error"
+        code = diagnostic.get("code", "runtime-error")
         print(
             f"{filename}:{line_number + 1}:{column + 1}: "
-            f"error: {diagnostic['message']}"
+            f"{severity}: {diagnostic['message']} [{code}]"
         )
         print(f"  line {line_number + 1}: {line}")
         print(f"           {' ' * column}{'^' * max(1, len(line) - column)}")
     if diagnostics:
-        return 1
+        return 1 if errors or ((deny_warnings or strict) and warnings) else 0
     print(f"No issues found in {filename}.")
     return 0
 
@@ -199,10 +238,50 @@ def main():
         sys.exit(run_package_command(sys.argv[2:]))
 
     if len(sys.argv) >= 2 and sys.argv[1] == "check":
-        if len(sys.argv) != 3:
-            print("Usage: py YubaLANG.py check <file.yl>", file=sys.stderr)
+        arguments = sys.argv[2:]
+        strict = False
+        deny_warnings = False
+        json_output = False
+        positional: list[str] = []
+        while arguments:
+            argument = arguments.pop(0)
+            if argument == "--strict":
+                strict = True
+            elif argument == "--deny-warnings":
+                deny_warnings = True
+            elif argument == "--json":
+                json_output = True
+            elif argument.startswith("-"):
+                print(f"check: unknown option: {argument}", file=sys.stderr)
+                sys.exit(2)
+            else:
+                positional.append(argument)
+        if len(positional) != 1:
+            print(
+                "Usage: py YubaLANG.py check [--strict] [--deny-warnings] "
+                "[--json] <file.yl>",
+                file=sys.stderr,
+            )
             sys.exit(2)
-        sys.exit(_check_file(sys.argv[2]))
+        sys.exit(
+            _check_file(
+                positional[0],
+                strict=strict,
+                deny_warnings=deny_warnings,
+                json_output=json_output,
+            )
+        )
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "explain":
+        if len(sys.argv) != 3:
+            print("Usage: py YubaLANG.py explain <diagnostic-code>", file=sys.stderr)
+            sys.exit(2)
+        explanation = explain_diagnostic(sys.argv[2])
+        if explanation is None:
+            print(f"explain: unknown diagnostic code: {sys.argv[2]}", file=sys.stderr)
+            sys.exit(1)
+        print(explanation)
+        sys.exit(0)
 
     if len(sys.argv) >= 2 and sys.argv[1] == "debug":
         arguments = sys.argv[2:]
@@ -276,7 +355,9 @@ def main():
         print(
             "Usage: py YubaLANG.py <file.yl> [arguments...] | "
             "run [project-directory] [-- arguments...] | repl | --lsp | "
-            "check <file.yl> | debug [--break [file:]line]... <file.yl> | "
+            "check [--strict] [--deny-warnings] [--json] <file.yl> | "
+            "explain <diagnostic-code> | "
+            "debug [--break [file:]line]... <file.yl> | "
             "fmt [--check|--write] <file.yl|directory>... | "
             "test [--filter PATTERN] [--json] [--coverage] [test-file.yl|test-directory] | "
             "package <init|add|remove|install|update|list|check>"

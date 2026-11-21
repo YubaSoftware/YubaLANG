@@ -1,0 +1,4 @@
+func define stop -> int
+    return 0
+    text output "never"
+endfunc

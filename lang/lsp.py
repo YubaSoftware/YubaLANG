@@ -14,7 +14,7 @@ from .expressions import parse_expression
 from .packages import PackageError, find_project_root
 from .runtime import Runtime, TYPES
 from .standard_library import is_standard_module
-from .typecheck import check_types
+from .typecheck import check_types_detailed
 from .type_system import is_known_type, parse_type
 
 
@@ -193,20 +193,26 @@ def _function_definition(parts: list[str]) -> tuple[str, list[str]] | None:
     return None
 
 
-def _diagnostic(line_number: int, line: str, message: str, code: str) -> dict[str, Any]:
+def _diagnostic(
+    line_number: int,
+    line: str,
+    message: str,
+    code: str,
+    severity: int = 1,
+) -> dict[str, Any]:
     return {
         "range": {
             "start": _position(line_number, 0),
             "end": _position(line_number, _utf16_length(line)),
         },
-        "severity": 1,
+        "severity": severity,
         "code": code,
         "source": "YubaLANG",
         "message": message,
     }
 
 
-def analyze_document(source: str) -> list[dict[str, Any]]:
+def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
     """Return static syntax diagnostics without executing the document."""
     lines = source.splitlines()
     diagnostics: list[dict[str, Any]] = []
@@ -471,9 +477,16 @@ def analyze_document(source: str) -> list[dict[str, Any]]:
                 f"Missing closing command for {block} block.", "unclosed-block",
             )
         )
-    for line_number, message in check_types(lines):
+    for diagnostic in check_types_detailed(lines, strict):
+        severity = 2 if diagnostic.severity == "warning" else 1
         diagnostics.append(
-            _diagnostic(line_number, lines[line_number], message, "type-mismatch")
+            _diagnostic(
+                diagnostic.line,
+                lines[diagnostic.line],
+                diagnostic.message,
+                diagnostic.code,
+                severity,
+            )
         )
     diagnostics.sort(key=lambda item: item["range"]["start"]["line"])
     return diagnostics

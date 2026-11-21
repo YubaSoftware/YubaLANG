@@ -72,20 +72,23 @@ are in the [feature backlog](docs/roadmap/features.md).
 
 ## Milestone 2 - Types and diagnostics
 
-- [ ] Narrow optionals and unions in `if`, `elseif`, `match`, and early-return
-  branches so checked code does not require repeated conversions.
-- [ ] Infer patterns, lambdas, comprehension filters, method/index results, and
-  simple alias chains in static analysis.
-- [ ] Assign stable diagnostic codes and severities to every checker, parser,
+- [x] Narrow optionals and unions in `if`, `elseif`, and early-return branches
+  so checked code does not require repeated conversions. `match` narrowing
+  waits for the milestone 1 `match`/`case` syntax.
+- [x] Infer comprehension filters, collection/index/`getattr` results, and
+  simple alias chains in static analysis. Pattern, lambda, and method
+  inference wait for the milestone 1 pattern, lambda, and method syntax.
+- [x] Assign stable diagnostic codes and severities to every checker, parser,
   and runtime diagnostic.
-- [ ] Add `--strict` and `--deny-warnings` modes that keep default execution
+- [x] Add `--strict` and `--deny-warnings` modes that keep default execution
   behavior unchanged.
-- [ ] Add `YubaLANG check --json` with stable fields for editors and CI.
-- [ ] Add `YubaLANG explain <code>` with a short explanation and example.
-- [ ] Audit high-value static-inference gaps and document the remaining dynamic
+- [x] Add `YubaLANG check --json` with stable fields for editors and CI.
+- [x] Add `YubaLANG explain <code>` with a short explanation and example.
+- [x] Audit high-value static-inference gaps and document the remaining dynamic
   cases; close the gaps that have crisp rules.
-- [ ] Add negative fixtures for every new diagnostic, including invalid
-  annotation, arity, narrowing, and exhaustiveness cases.
+- [x] Add negative fixtures for every new diagnostic, including invalid
+  annotation, arity, and narrowing cases. Exhaustiveness fixtures wait for
+  `match`/enum syntax.
 
 ## Milestone 3 - Runtime and standard library
 

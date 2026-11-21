@@ -1,0 +1,2 @@
+define var value: int? = 5
+define var values: list[int] = [value]
