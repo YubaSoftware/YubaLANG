@@ -1,6 +1,6 @@
 from typing import Any
 
-from .runtime import TYPES, RecordValue, Runtime
+from .runtime import TYPES, EnumValue, RecordValue, Runtime
 from .expressions import evaluate_expression
 from .type_system import FunctionReference, format_type, parse_type
 
@@ -17,6 +17,13 @@ def parse_value(value: str, expected_type: str, runtime: Runtime) -> Any:
 
     data = runtime.get_var(value)
     quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"')
+
+    if not spec.arguments and spec.name in runtime.type_aliases:
+        target = runtime.type_aliases[spec.name]
+        candidate = parse_value(value, format_type(target), runtime)
+        if not runtime.value_matches_type(expected_type, candidate):
+            raise TypeError(f"Value does not match type '{expected_type}'.")
+        return candidate
 
     if spec.name == "function":
         if data is not None and isinstance(data["value"], FunctionReference):
@@ -141,6 +148,14 @@ def parse_value(value: str, expected_type: str, runtime: Runtime) -> Any:
         if data["type"] != expected_type:
             raise TypeError(f"Variable '{value}' is not a {expected_type}.")
         return data["value"]
+    if expected_type in runtime.enums:
+        if (
+            data is not None
+            and data["type"] == expected_type
+            and isinstance(data["value"], EnumValue)
+        ):
+            return data["value"]
+        raise TypeError(f"Expected a '{expected_type}' enum variable.")
     if expected_type in runtime.records:
         if (
             data is not None

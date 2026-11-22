@@ -1,6 +1,8 @@
 ﻿"""Source loading and control-flow execution for YubaLANG."""
 
+import ast
 import os
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +17,12 @@ from .packages import (
     read_manifest,
     resolve_dependency,
     resolve_entry,
+)
+from .patterns import (
+    match_case_pattern,
+    parse_match_pattern,
+    parse_pattern,
+    unpack_pattern,
 )
 from .runtime import (
     MAX_FUNCTION_CALL_DEPTH,
@@ -70,17 +78,27 @@ def _split(line: str) -> list[str]:
 
 
 def _execute_parts(parts: list[str], runtime: Runtime, source_name: str) -> None:
-    if parts:
-        execute_command(
-            parts,
-            runtime,
-            lambda name, args: _invoke_function(name, args, runtime),
-            source_name,
-        )
+    if not parts:
+        return
+    source = " ".join(parts)
+    if re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\(.*\)", source, re.S):
+        evaluate_expression(source, runtime)
+        return
+    execute_command(
+        parts,
+        runtime,
+        lambda name, args: _invoke_function(name, args, runtime),
+        source_name,
+    )
 
 
 def _type_of(value: Any) -> str:
     return Runtime.type_name(value)
+
+
+def _bind_loop_pattern(runtime: Runtime, node: ast.expr, value: Any) -> None:
+    for name, item in unpack_pattern(node, value):
+        runtime.define_var(name, _type_of(item), item)
 
 
 def interpret(
@@ -492,6 +510,86 @@ def _execute_try_block(
     return index
 
 
+def _execute_match_block(
+    lines: list[str],
+    runtime: Runtime,
+    source_name: str,
+    line_numbers: list[int],
+    namespace: str | None,
+    start: int,
+) -> int:
+    parts = _split(lines[start].strip())
+    if len(parts) < 2:
+        raise SyntaxError("Usage: match <value>")
+    subject = evaluate_expression(" ".join(parts[1:]), runtime)
+    sections: list[tuple[str | None, list[str], list[int]]] = []
+    current: tuple[str | None, list[str], list[int]] | None = None
+    depth = 1
+    index = start + 1
+    while index < len(lines):
+        source_line = lines[index]
+        stripped = source_line.strip()
+        try:
+            nested = _split(stripped) if stripped else []
+        except SyntaxError:
+            nested = []
+        command = nested[0] if nested else ""
+        if command == "match":
+            depth += 1
+        elif command == "endmatch":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth == 1 and command == "case":
+            pattern_source = " ".join(nested[1:])
+            if not pattern_source:
+                raise SyntaxError("Usage: case <pattern>")
+            current = (
+                None if pattern_source == "else" else pattern_source,
+                [], [],
+            )
+            sections.append(current)
+            index += 1
+            continue
+        if depth == 1 and command == "else":
+            if len(nested) != 1:
+                raise SyntaxError("Usage: else")
+            current = (None, [], [])
+            sections.append(current)
+            index += 1
+            continue
+        if current is None:
+            if not stripped or stripped.startswith("#"):
+                index += 1
+                continue
+            raise SyntaxError("A match block requires a case before its body.")
+        current[1].append(source_line)
+        current[2].append(line_numbers[index])
+        index += 1
+    if index == len(lines):
+        raise SyntaxError("Missing endmatch for match block.")
+    if not sections:
+        raise SyntaxError("A match block requires at least one case.")
+
+    for pattern_source, body, body_line_numbers in sections:
+        if pattern_source is None:
+            bindings: dict[str, Any] | None = {}
+        else:
+            pattern = parse_match_pattern(pattern_source, runtime)
+            bindings = match_case_pattern(pattern, subject, runtime)
+        if bindings is not None:
+            with runtime.scope():
+                for name, value in bindings.items():
+                    runtime.define_var(name, _type_of(value), value)
+                execute_lines(
+                    body, runtime, source_name, body_line_numbers, namespace
+                )
+            return index
+    raise ValueError(
+        f"match is not exhaustive for value {subject!r}."
+    )
+
+
 def _collect_record_type_names(lines: list[str], runtime: Runtime) -> None:
     """Register record names before execution so field types may refer forward."""
     for line in lines:
@@ -508,6 +606,12 @@ def _collect_record_type_names(lines: list[str], runtime: Runtime) -> None:
             and parts[2].isidentifier()
         ):
             runtime.record_type_names.add(parts[2])
+        elif (
+            len(parts) >= 3
+            and parts[:2] == ("enum", "define")
+            and parts[2].isidentifier()
+        ):
+            runtime.enum_type_names.add(parts[2])
 
 
 def execute_lines(
@@ -568,6 +672,13 @@ def execute_lines(
                 if len(parts) != 1:
                     raise SyntaxError("Usage: try")
                 index = _execute_try_block(
+                    lines, runtime, source_name, line_numbers, namespace, index
+                )
+                index += 1
+                continue
+
+            if command == "match":
+                index = _execute_match_block(
                     lines, runtime, source_name, line_numbers, namespace, index
                 )
                 index += 1
@@ -798,20 +909,57 @@ def execute_lines(
                 if index == len(lines):
                     raise SyntaxError("Missing endloop for loop.")
                 if loop_type == "for":
-                    count = evaluate_expression(condition, runtime)
-                    if not isinstance(count, int) or isinstance(count, bool):
-                        raise TypeError("loop for count must evaluate to an integer.")
-                    with runtime.scope():
-                        for _ in range(count):
-                            try:
-                                execute_lines(
-                                    body, runtime, source_name,
-                                    body_line_numbers, namespace
-                                )
-                            except ContinueException:
-                                continue
-                            except BreakException:
-                                break
+                    in_index = next(
+                        (
+                            position for position in range(2, len(parts))
+                            if parts[position] == "in"
+                        ),
+                        None,
+                    )
+                    if in_index is not None:
+                        target_source = " ".join(parts[2:in_index])
+                        iterable_source = " ".join(parts[in_index + 1:])
+                        if not target_source or not iterable_source:
+                            raise SyntaxError(
+                                "Usage: loop for <target> in <iterable>"
+                            )
+                        target = parse_pattern(target_source, "loop target")
+                        values = evaluate_expression(iterable_source, runtime)
+                        try:
+                            iterator = iter(values)
+                        except TypeError as error:
+                            raise TypeError(
+                                "loop for ... in requires an iterable value."
+                            ) from error
+                        with runtime.scope():
+                            for value in iterator:
+                                try:
+                                    _bind_loop_pattern(runtime, target, value)
+                                    execute_lines(
+                                        body, runtime, source_name,
+                                        body_line_numbers, namespace
+                                    )
+                                except ContinueException:
+                                    continue
+                                except BreakException:
+                                    break
+                    else:
+                        count = evaluate_expression(condition, runtime)
+                        if not isinstance(count, int) or isinstance(count, bool):
+                            raise TypeError(
+                                "loop for count must evaluate to an integer."
+                            )
+                        with runtime.scope():
+                            for _ in range(count):
+                                try:
+                                    execute_lines(
+                                        body, runtime, source_name,
+                                        body_line_numbers, namespace
+                                    )
+                                except ContinueException:
+                                    continue
+                                except BreakException:
+                                    break
                 else:
                     with runtime.scope():
                         while evaluate_condition(condition, runtime):

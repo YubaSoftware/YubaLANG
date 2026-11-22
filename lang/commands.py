@@ -1,11 +1,15 @@
+import ast
+import operator
 from typing import Any, Callable
 
 from . import arith, iteration, string_builtins, utilities
 from .collection_commands import execute_collection_command
 from .conversion import convert_value, parse_value
+from .enums import execute_enum_command, execute_type_command
 from .expressions import evaluate_expression
 from .ffi import execute_ffi
 from .io_commands import execute_io_command
+from .patterns import parse_pattern, pattern_names, unpack_pattern
 from .runtime import RecordDefinition, RecordValue, Runtime, TYPES
 from .string_builtins import resolve
 from .type_system import FunctionReference, format_type, parse_type
@@ -13,6 +17,43 @@ from .type_system import FunctionReference, format_type, parse_type
 
 def _assign(runtime: Runtime, name: str, value: Any) -> None:
     runtime.assign_var(name, value)
+
+
+_COMPOUND_ASSIGN = {
+    "+=": operator.add,
+    "-=": operator.sub,
+    "*=": operator.mul,
+    "/=": operator.truediv,
+    "//=": operator.floordiv,
+    "%=": operator.mod,
+    "**=": operator.pow,
+    "&=": operator.and_,
+    "|=": operator.or_,
+    "^=": operator.xor,
+    "<<=": operator.lshift,
+    ">>=": operator.rshift,
+}
+
+
+def _destructuring_types(
+    type_source: str, names: list[str]
+) -> list[str]:
+    spec = parse_type(type_source)
+    if spec.name == "tuple" and spec.arguments:
+        if len(spec.arguments) == 1:
+            return [format_type(spec.arguments[0]) for _ in names]
+        if len(spec.arguments) != len(names):
+            raise ValueError(
+                f"Destructuring declaration has {len(names)} target(s) but "
+                f"the tuple type has {len(spec.arguments)} element type(s)."
+            )
+        return [format_type(argument) for argument in spec.arguments]
+    if spec.name == "list" and spec.arguments:
+        return [format_type(spec.arguments[0]) for _ in names]
+    raise TypeError(
+        "Destructuring declarations require a tuple or list type."
+    )
+
 
 
 def evaluate_condition(condition: str, runtime: Runtime) -> bool:
@@ -56,11 +97,52 @@ def execute_command(
 ) -> None:
     command = parts[0]
 
-    if command == "set" and len(parts) >= 4 and parts[2] == "=":
-        name = parts[1]
-        if not name.isidentifier():
-            raise SyntaxError("Assignment target must be an identifier.")
-        _assign(runtime, name, evaluate_expression(" ".join(parts[3:]), runtime))
+    if command == "set":
+        compound_index = next(
+            (
+                index for index in range(2, len(parts))
+                if parts[index] in _COMPOUND_ASSIGN
+            ),
+            None,
+        )
+        if compound_index is not None:
+            target_source = " ".join(parts[1:compound_index])
+            value_source = " ".join(parts[compound_index + 1:])
+            if (
+                not target_source.isidentifier()
+                or not value_source
+                or compound_index != 2
+            ):
+                raise SyntaxError(
+                    "Usage: set <name> <operator>= <value>"
+                )
+            variable = runtime.require_var(target_source)
+            operation = _COMPOUND_ASSIGN[parts[compound_index]]
+            value = evaluate_expression(value_source, runtime)
+            try:
+                result = operation(variable["value"], value)
+            except TypeError as error:
+                raise TypeError(
+                    f"Operator '{parts[compound_index]}' cannot be applied "
+                    f"to '{variable['type']}' and "
+                    f"'{Runtime.type_name(value)}'."
+                ) from error
+            _assign(runtime, target_source, result)
+            return
+
+    if command == "set" and "=" in parts[1:]:
+        equal_index = parts.index("=", 1)
+        target_source = " ".join(parts[1:equal_index])
+        value_source = " ".join(parts[equal_index + 1:])
+        if not target_source or not value_source:
+            raise SyntaxError("Usage: set <name> = <value>")
+        if not any(character in target_source for character in "([,"):
+            if not target_source.isidentifier():
+                raise SyntaxError("Assignment target must be an identifier.")
+        target = parse_pattern(target_source, "assignment target")
+        value = evaluate_expression(value_source, runtime)
+        for name, item in unpack_pattern(target, value):
+            _assign(runtime, name, item)
         return
 
     if command == "ffi":
@@ -69,26 +151,56 @@ def execute_command(
 
     if command == "define":
         if (
-            len(parts) < 6 or parts[1] != "var" or not parts[2].endswith(":")
-            or "=" not in parts
+            len(parts) < 5
+            or parts[1] not in ("var", "const")
+            or "=" not in parts[2:]
         ):
+            raise SyntaxError(
+                "Usage: define var <name>: <type> = <value> "
+                "(or define const for an immutable value)"
+            )
+        is_constant = parts[1] == "const"
+        equal_index = parts.index("=", 2)
+        declaration = " ".join(parts[2:equal_index])
+        if ":" not in declaration:
             raise SyntaxError("Usage: define var <name>: <type> = <value>")
-        equal_index = parts.index("=")
-        name = parts[2][:-1]
-        if not name.isidentifier():
-            raise SyntaxError("Variable name must be an identifier.")
-        value_type = format_type(parse_type(" ".join(parts[3:equal_index])))
+        target_source, type_source = declaration.split(":", 1)
+        target_source, type_source = target_source.strip(), type_source.strip()
+        if not target_source or not type_source:
+            raise SyntaxError("Usage: define var <name>: <type> = <value>")
+        if not any(character in target_source for character in "([,"):
+            if not target_source.isidentifier():
+                raise SyntaxError("Variable name must be an identifier.")
+        value_type = format_type(parse_type(type_source))
         if not runtime.type_is_known(value_type):
             raise ValueError(f"Unknown type: {value_type}")
-        if value_type in runtime.records:
-            source = " ".join(parts[equal_index + 1:])
-            variable = runtime.get_var(source)
-            if variable is None or variable["type"] != value_type:
-                raise TypeError(f"Expected a '{value_type}' record variable.")
-            value = variable["value"]
-        else:
-            value = parse_value(" ".join(parts[equal_index + 1:]), value_type, runtime)
-        runtime.define_var(name, value_type, value)
+        value_source = " ".join(parts[equal_index + 1:])
+        define = runtime.define_const if is_constant else runtime.define_var
+        if target_source.isidentifier():
+            if value_type in runtime.records:
+                variable = runtime.get_var(value_source)
+                if variable is None or variable["type"] != value_type:
+                    raise TypeError(f"Expected a '{value_type}' record variable.")
+                value = variable["value"]
+            else:
+                value = parse_value(value_source, value_type, runtime)
+            define(target_source, value_type, value)
+            return
+        target = parse_pattern(target_source, "declaration target")
+        names = pattern_names(target)
+        element_types = _destructuring_types(value_type, names)
+        try:
+            value = parse_value(value_source, value_type, runtime)
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                f"Cannot destructure a value that does not match type "
+                f"'{value_type}'."
+            ) from error
+        pairs = unpack_pattern(target, value)
+        if len(pairs) != len(element_types):
+            raise ValueError("Destructuring declaration type does not match its targets.")
+        for (name, item), item_type in zip(pairs, element_types):
+            define(name, item_type, item)
         return
 
     if command == "record":
@@ -107,7 +219,12 @@ def execute_command(
             raise SyntaxError("A record must define at least one field.")
         fields: dict[str, str] = {}
         defaults: dict[str, str] = {}
+        constants: set[str] = set()
+        constant_next = False
         for declaration in parts[3:]:
+            if declaration in ("const", "mutable"):
+                constant_next = declaration == "const"
+                continue
             if ":" not in declaration:
                 raise SyntaxError(
                     "Record fields must use <field>:<type>[=<default>] syntax."
@@ -123,9 +240,20 @@ def execute_command(
             if not runtime.type_is_known(field_type):
                 raise ValueError(f"Unknown type: {field_type}")
             fields[field_name] = format_type(parse_type(field_type))
+            if constant_next:
+                constants.add(field_name)
+                constant_next = False
             if default_separator:
                 defaults[field_name] = default_source
-        runtime.records[name] = RecordDefinition(fields, defaults)
+        runtime.records[name] = RecordDefinition(fields, defaults, constants)
+        return
+
+    if command == "enum":
+        execute_enum_command(parts, runtime)
+        return
+
+    if command == "type":
+        execute_type_command(parts, runtime)
         return
 
     if command == "assert":
@@ -400,6 +528,11 @@ def _execute_attribute_command(parts: list[str], runtime: Runtime) -> None:
             _assign(runtime, destination, True)
         else:
             field_type = runtime.records[variable["type"]].fields[attr_name]
+            if attr_name in runtime.records[variable["type"]].constants:
+                raise TypeError(
+                    f"Field '{attr_name}' of record '{variable['type']}' "
+                    "is immutable."
+                )
             value = resolve(parts[3], runtime)
             if not runtime.value_matches_type(field_type, value):
                 raise TypeError(

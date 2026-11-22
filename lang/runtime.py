@@ -46,12 +46,39 @@ class DebugHook(Protocol):
 class RecordDefinition:
     fields: dict[str, str]
     defaults: dict[str, str] = field(default_factory=dict)
+    constants: set[str] = field(default_factory=set)
 
 
 @dataclass
 class RecordValue:
     record_type: str
     fields: dict[str, Any]
+
+
+@dataclass
+class EnumVariantDefinition:
+    fields: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class EnumDefinition:
+    name: str
+    variants: dict[str, EnumVariantDefinition] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EnumValue:
+    enum_type: str
+    variant: str
+    fields: tuple[Any, ...] = ()
+
+    def __str__(self) -> str:
+        if not self.fields:
+            return f"{self.enum_type}.{self.variant}"
+        values = ", ".join(str(value) for value in self.fields)
+        return f"{self.enum_type}.{self.variant}({values})"
+
+    __repr__ = __str__
 
 
 class CoverageHook(Protocol):
@@ -84,6 +111,10 @@ class Runtime:
     closure_counter: int = 0
     records: dict[str, RecordDefinition] = field(default_factory=dict)
     record_type_names: set[str] = field(default_factory=set)
+    enums: dict[str, EnumDefinition] = field(default_factory=dict)
+    enum_type_names: set[str] = field(default_factory=set)
+    type_aliases: dict[str, TypeSpec] = field(default_factory=dict)
+    constants: set[str] = field(default_factory=set)
     native_libraries: dict[str, Any] = field(default_factory=dict)
     native_functions: dict[str, Callable[..., Any]] = field(default_factory=dict)
     project_root: Path | None = None
@@ -151,7 +182,19 @@ class Runtime:
         return None
 
     def define_var(self, name: str, var_type: str, value: Any) -> None:
+        if name in self.scopes[-1] and name in self.constants:
+            raise TypeError(
+                f"Cannot redeclare constant '{name}' in the same scope."
+            )
         self.scopes[-1][name] = {"type": var_type, "value": value}
+
+    def define_const(self, name: str, var_type: str, value: Any) -> None:
+        """Define a variable that cannot be reassigned or converted."""
+        self.define_var(name, var_type, value)
+        self.constants.add(name)
+
+    def is_constant(self, name: str) -> bool:
+        return name in self.constants
 
     @contextmanager
     def scope(self) -> Iterator[None]:
@@ -254,6 +297,8 @@ class Runtime:
         self.close_resources()
 
     def update_var(self, name: str, var_type: str, value: Any) -> None:
+        if name in self.constants:
+            raise TypeError(f"Cannot reassign constant '{name}'.")
         start = self.function_scope_starts[-1] if self.function_scope_starts else 0
         target_scope = next(
             (scope for scope in reversed(self.scopes[start:]) if name in scope),
@@ -290,6 +335,12 @@ class Runtime:
                 self._matches_type(option, value, allow_widening)
                 for option in spec.arguments
             )
+        if not spec.arguments and spec.name in self.type_aliases:
+            return self._matches_type(
+                self.type_aliases[spec.name], value, allow_widening
+            )
+        if spec.name in self.enums:
+            return isinstance(value, EnumValue) and value.enum_type == spec.name
         if spec.name == "function":
             if not isinstance(value, FunctionReference):
                 return False
@@ -350,14 +401,40 @@ class Runtime:
         )
 
     def type_is_known(self, type_name: str) -> bool:
+        spec = self._expand_aliases(parse_type(type_name), set())
         return is_known_type(
-            parse_type(type_name), set(self.records) | self.record_type_names
+            spec,
+            set(self.records)
+            | self.record_type_names
+            | set(self.enums)
+            | self.enum_type_names,
         )
+
+    def _expand_aliases(self, spec: TypeSpec, seen: set[str]) -> TypeSpec:
+        if not spec.arguments and spec.name in self.type_aliases:
+            if spec.name in seen:
+                raise ValueError(
+                    f"Type alias '{spec.name}' refers to itself."
+                )
+            return self._expand_aliases(
+                self.type_aliases[spec.name], seen | {spec.name}
+            )
+        if spec.arguments:
+            return TypeSpec(
+                spec.name,
+                tuple(
+                    self._expand_aliases(argument, seen)
+                    for argument in spec.arguments
+                ),
+            )
+        return spec
 
     @staticmethod
     def type_name(value: Any) -> str:
         if isinstance(value, FunctionReference):
             return "function"
+        if isinstance(value, EnumValue):
+            return value.enum_type
         if isinstance(value, RecordValue):
             return value.record_type
         if value is None:

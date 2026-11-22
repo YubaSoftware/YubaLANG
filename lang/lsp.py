@@ -28,7 +28,7 @@ _COMMANDS = {
     "range", "record", "repr",
     "return", "reversed", "set", "setattr", "slice", "sorted", "text",
     "throw", "try", "catch", "finally", "endtry", "tuple", "type", "vars",
-    "wait", "zip",
+    "wait", "zip", "enum", "match", "case", "endmatch",
 }
 _ARITY: dict[str, tuple[int, ...]] = {
     "all": (3,), "any": (3,), "ascii": (3,), "bool": (3,),
@@ -233,6 +233,17 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
             and _IDENTIFIER.fullmatch(parts[2])
         ):
             record_types.add(parts[2])
+        elif (
+            len(parts) >= 3 and parts[:2] == ["enum", "define"]
+            and _IDENTIFIER.fullmatch(parts[2])
+        ):
+            record_types.add(parts[2])
+        elif (
+            len(parts) >= 5 and parts[1] in ("define", "alias")
+            and parts[0] == "type" and "=" in parts[2:]
+            and _IDENTIFIER.fullmatch(parts[2])
+        ):
+            record_types.add(parts[2])
 
     for line_number, raw_line in enumerate(lines):
         line = raw_line.strip()
@@ -333,22 +344,48 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
                         parse_expression(" ".join(parts[2:]))
                     except SyntaxError as expression_error:
                         error = str(expression_error)
-        elif command in ("elseif", "else", "endif", "endfunc", "endloop", "endtry"):
-            expected = {"elseif": "if", "else": "if", "endif": "if",
-                        "endfunc": "func", "endloop": "loop", "endtry": "try"}[command]
-            if len(parts) != 1 and command != "elseif":
-                error = f"'{command}' does not take arguments."
-            elif command == "elseif" and len(parts) < 2:
-                error = "Usage: elseif <condition>"
-            elif command == "elseif":
+        elif command == "match":
+            if len(parts) < 2:
+                error = "Usage: match <value>"
+            else:
                 try:
                     parse_expression(" ".join(parts[1:]))
                 except SyntaxError as expression_error:
                     error = str(expression_error)
-            elif not blocks or blocks[-1][0] != expected:
-                error = f"Unexpected '{command}' without an open {expected} block."
-            elif command in ("endif", "endfunc", "endloop", "endtry"):
+                else:
+                    blocks.append(("match", line_number))
+        elif command == "case":
+            if not blocks or blocks[-1][0] != "match":
+                error = "Unexpected 'case' without an open match block."
+            elif len(parts) < 2:
+                error = "Usage: case <pattern>"
+        elif command == "endmatch":
+            if len(parts) != 1:
+                error = "'endmatch' does not take arguments."
+            elif not blocks or blocks[-1][0] != "match":
+                error = "Unexpected 'endmatch' without an open match block."
+            else:
                 blocks.pop()
+        elif command in ("elseif", "else", "endif", "endfunc", "endloop", "endtry"):
+            if command == "else" and blocks and blocks[-1][0] == "match":
+                if len(parts) != 1:
+                    error = "'else' does not take arguments."
+            else:
+                expected = {"elseif": "if", "else": "if", "endif": "if",
+                            "endfunc": "func", "endloop": "loop", "endtry": "try"}[command]
+                if len(parts) != 1 and command != "elseif":
+                    error = f"'{command}' does not take arguments."
+                elif command == "elseif" and len(parts) < 2:
+                    error = "Usage: elseif <condition>"
+                elif command == "elseif":
+                    try:
+                        parse_expression(" ".join(parts[1:]))
+                    except SyntaxError as expression_error:
+                        error = str(expression_error)
+                elif not blocks or blocks[-1][0] != expected:
+                    error = f"Unexpected '{command}' without an open {expected} block."
+                elif command in ("endif", "endfunc", "endloop", "endtry"):
+                    blocks.pop()
         elif command not in _COMMANDS:
             code = "unknown-command"
             error = f"Unknown command: {command}"
@@ -357,15 +394,26 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
                 (index for index in range(2, len(parts)) if parts[index] == "="),
                 -1,
             )
+            declaration = (
+                " ".join(parts[2:equal_index]) if equal_index >= 3 else ""
+            )
+            target_source, _, type_source = declaration.partition(":")
+            target_source, type_source = (
+                target_source.strip(), type_source.strip()
+            )
             if (
-                len(parts) < 4 or parts[1] != "var"
-                or not parts[2].endswith(":") or equal_index < 3
+                len(parts) < 4 or parts[1] not in ("var", "const")
+                or equal_index < 3 or not target_source or not type_source
             ):
-                error = "Usage: define var <name>: <type> = <value>"
-            elif not parts[2][:-1].isidentifier():
+                error = (
+                    "Usage: define var|const <name>: <type> = <value>"
+                )
+            elif (
+                not any(character in target_source for character in "([,")
+                and not _IDENTIFIER.fullmatch(target_source)
+            ):
                 error = "Variable name must be an identifier."
             else:
-                type_source = " ".join(parts[3:equal_index])
                 try:
                     value_type = parse_type(type_source)
                 except ValueError:
@@ -384,13 +432,27 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
                 except SyntaxError as expression_error:
                     error = str(expression_error)
         elif command == "set" and len(parts) >= 2 and parts[1] not in ("add", "remove"):
-            if len(parts) < 4 or parts[2] != "=":
-                error = "Usage: set <variable> = <expression>"
-            elif not parts[1].isidentifier():
+            operators = (
+                "=", "+=", "-=", "*=", "/=", "//=", "%=", "**=",
+                "&=", "|=", "^=", "<<=", ">>=",
+            )
+            operator_index = next(
+                (index for index in range(1, len(parts)) if parts[index] in operators),
+                -1,
+            )
+            target_source = (
+                " ".join(parts[1:operator_index]) if operator_index >= 2 else ""
+            )
+            if operator_index < 0 or not target_source:
+                error = "Usage: set <name> = <expression>"
+            elif (
+                not any(character in target_source for character in "([,")
+                and not _IDENTIFIER.fullmatch(target_source)
+            ):
                 error = "Assignment target must be an identifier."
             else:
                 try:
-                    parse_expression(" ".join(parts[3:]))
+                    parse_expression(" ".join(parts[operator_index + 1:]))
                 except SyntaxError as expression_error:
                     error = str(expression_error)
         elif command == "assert" and len(parts) not in (2, 3):
@@ -414,6 +476,8 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
                 error = "A record must define at least one field."
             elif parts[1] == "define":
                 for declaration in parts[3:]:
+                    if declaration in ("const", "mutable"):
+                        continue
                     field_name, separator, type_source = declaration.partition(":")
                     type_source = type_source.partition("=")[0]
                     if (

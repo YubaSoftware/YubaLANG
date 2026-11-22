@@ -5,8 +5,30 @@ import operator
 import re
 from typing import Any, Callable
 
-from .runtime import Runtime
+from .runtime import RecordValue, Runtime
 
+
+_STRING_METHODS = frozenset({
+    "capitalize", "casefold", "count", "endswith", "find", "format", "index",
+    "isalnum", "isalpha", "isdigit", "islower", "isspace", "isupper", "join",
+    "lower", "lstrip", "partition", "removeprefix", "removesuffix", "replace",
+    "rfind", "rindex", "rpartition", "rsplit", "rstrip", "split", "splitlines",
+    "startswith", "strip", "swapcase", "title", "upper", "zfill",
+})
+_LIST_METHODS = frozenset({
+    "append", "clear", "copy", "count", "extend", "index", "insert", "pop",
+    "remove", "reverse", "sort",
+})
+_DICT_METHODS = frozenset({
+    "clear", "copy", "get", "items", "keys", "pop", "popitem", "setdefault",
+    "update", "values",
+})
+_SET_METHODS = frozenset({
+    "add", "clear", "copy", "difference", "discard", "intersection",
+    "isdisjoint", "issubset", "issuperset", "pop", "remove", "symmetric_difference",
+    "union", "update",
+})
+_BYTES_METHODS = frozenset({"decode", "hex", "split", "strip", "replace"})
 
 _OPERATORS: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
     ast.Add: operator.add,
@@ -82,6 +104,159 @@ def _callable_name(node: ast.expr) -> str | None:
     return ".".join(reversed(parts))
 
 
+def _read_attribute(value: Any, name: str) -> Any:
+    if isinstance(value, RecordValue):
+        if name in value.fields:
+            return value.fields[name]
+        raise AttributeError(
+            f"Record '{value.record_type}' has no field named '{name}'."
+        )
+    if isinstance(value, dict):
+        if name in value:
+            return value[name]
+        raise AttributeError(f"Dictionary has no key named '{name}'.")
+    raise AttributeError(
+        f"Values of type '{_describe(value)}' have no attribute '{name}'."
+    )
+
+
+def _read_index(value: Any, index: Any) -> Any:
+    if isinstance(value, (list, tuple, str, bytes, bytearray)):
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise TypeError("Collection indices must be integers.")
+        try:
+            return value[index]
+        except IndexError as error:
+            raise IndexError("Collection index is out of range.") from error
+    if isinstance(value, dict):
+        if index not in value:
+            raise KeyError(f"Dictionary has no key {index!r}.")
+        return value[index]
+    raise TypeError(
+        f"Values of type '{_describe(value)}' cannot be indexed."
+    )
+
+
+def _read_slice(source: Any, start: Any, stop: Any, step: Any) -> Any:
+    if not isinstance(source, (list, tuple, str, bytes, bytearray)):
+        raise TypeError(
+            f"Values of type '{_describe(source)}' cannot be sliced."
+        )
+    for value in (start, stop, step):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise TypeError("Slice bounds must be integers or none.")
+    return source[slice(start, stop, step)]
+
+
+def _describe(value: Any) -> str:
+    if isinstance(value, RecordValue):
+        return value.record_type
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, dict):
+        return "dict"
+    for name, python_type in (
+        ("string", str), ("int", int), ("float", float), ("list", list),
+        ("tuple", tuple), ("set", set), ("bytes", bytes),
+        ("bytearray", bytearray),
+    ):
+        if isinstance(value, python_type):
+            return name
+    return type(value).__name__
+
+
+def _method(receiver: Any, name: str) -> Callable[..., Any]:
+    if isinstance(receiver, RecordValue):
+        raise AttributeError(
+            f"Record methods are not supported; '{name}' is not a record field."
+        )
+    if isinstance(receiver, str):
+        allowed = _STRING_METHODS
+    elif isinstance(receiver, list):
+        allowed = _LIST_METHODS
+    elif isinstance(receiver, dict):
+        allowed = _DICT_METHODS
+    elif isinstance(receiver, set):
+        allowed = _SET_METHODS
+    elif isinstance(receiver, (bytes, bytearray)):
+        allowed = _BYTES_METHODS
+    else:
+        raise AttributeError(
+            f"Values of type '{_describe(receiver)}' have no methods."
+        )
+    if name not in allowed:
+        raise AttributeError(
+            f"'{_describe(receiver)}' values have no supported method '{name}'."
+        )
+    method = getattr(receiver, name)
+    if isinstance(receiver, dict) and name in ("keys", "values", "items"):
+        return lambda: list(getattr(receiver, name)())
+    return method
+
+
+def _validate_mutation(
+    runtime: Runtime, receiver: Any, name: str, arguments: list[Any]
+) -> None:
+    if name == "append" and arguments:
+        runtime.validate_container_mutation(receiver, [*receiver, arguments[0]])
+    elif name == "insert" and len(arguments) >= 2:
+        candidate = list(receiver)
+        candidate.insert(arguments[0], arguments[1])
+        runtime.validate_container_mutation(receiver, candidate)
+    elif name == "extend" and arguments:
+        candidate = [*receiver, *arguments[0]]
+        runtime.validate_container_mutation(receiver, candidate)
+    elif name == "add" and arguments:
+        runtime.validate_container_mutation(receiver, receiver | {arguments[0]})
+    elif name == "update" and isinstance(receiver, set) and arguments:
+        runtime.validate_container_mutation(
+            receiver, receiver | set(arguments[0])
+        )
+
+
+def _sequence_items(elts: list[ast.expr], evaluate) -> list[Any]:
+    items: list[Any] = []
+    for item in elts:
+        if isinstance(item, ast.Starred):
+            expanded = evaluate(item.value)
+            if not isinstance(expanded, (list, tuple, set)):
+                raise TypeError(
+                    "Starred values must be a list, tuple, or set."
+                )
+            items.extend(expanded)
+        else:
+            items.append(evaluate(item))
+    return items
+
+
+def _call_arguments(node: ast.Call, evaluate) -> tuple[list[Any], dict[str, Any]]:
+    arguments: list[Any] = []
+    for argument in node.args:
+        if isinstance(argument, ast.Starred):
+            expanded = evaluate(argument.value)
+            if not isinstance(expanded, (list, tuple)):
+                raise TypeError(
+                    "Starred call arguments must be a list or tuple."
+                )
+            arguments.extend(expanded)
+        else:
+            arguments.append(evaluate(argument))
+    keyword_arguments: dict[str, Any] = {}
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            expanded = evaluate(keyword.value)
+            if not isinstance(expanded, dict):
+                raise TypeError("Keyword unpacking requires a dictionary.")
+            if not all(isinstance(key, str) for key in expanded):
+                raise TypeError("Keyword argument names must be strings.")
+            keyword_arguments.update(expanded)
+        else:
+            keyword_arguments[keyword.arg] = evaluate(keyword.value)
+    return arguments, keyword_arguments
+
+
 def parse_expression(source: str) -> ast.expr:
     try:
         expression = ast.parse(_normalize(source), mode="eval").body
@@ -99,13 +274,13 @@ def parse_expression(source: str) -> ast.expr:
             for item in node.elts:
                 validate(item)
             return
+        if isinstance(node, ast.Starred):
+            validate(node.value)
+            return
         if isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
-                if key is None:
-                    raise SyntaxError(
-                        "Dictionary unpacking is not supported in expressions."
-                    )
-                validate(key)
+                if key is not None:
+                    validate(key)
                 validate(value)
             return
         if isinstance(node, ast.JoinedStr):
@@ -158,12 +333,33 @@ def parse_expression(source: str) -> ast.expr:
             for comparator in node.comparators:
                 validate(comparator)
             return
+        if isinstance(node, ast.Attribute):
+            validate(node.value)
+            return
+        if isinstance(node, ast.Subscript):
+            validate(node.value)
+            validate(node.slice)
+            return
+        if isinstance(node, ast.Slice):
+            for value in (node.lower, node.upper, node.step):
+                if value is not None:
+                    validate(value)
+            return
         if isinstance(node, ast.Call):
-            name = _callable_name(node.func)
-            if name is None:
-                raise SyntaxError(
-                    "Function calls in expressions require a name or qualified name."
-                )
+            if isinstance(node.func, ast.Attribute):
+                validate(node.func.value)
+            else:
+                name = _callable_name(node.func)
+                if name is None:
+                    raise SyntaxError(
+                        "Function calls in expressions require a name, "
+                        "qualified name, or method receiver."
+                    )
+            name = (
+                _callable_name(node.func)
+                if not isinstance(node.func, ast.Attribute)
+                else None
+            )
             if name == "range" and (
                 node.keywords or not 1 <= len(node.args) <= 3
             ):
@@ -171,16 +367,15 @@ def parse_expression(source: str) -> ast.expr:
                     "range() requires one to three positional arguments."
                 )
             if any(isinstance(argument, ast.Starred) for argument in node.args):
-                raise SyntaxError(
-                    "Argument unpacking is not supported in expressions."
-                )
-            for argument in node.args:
-                validate(argument)
+                for argument in node.args:
+                    if isinstance(argument, ast.Starred):
+                        validate(argument.value)
+                    else:
+                        validate(argument)
+            else:
+                for argument in node.args:
+                    validate(argument)
             for keyword in node.keywords:
-                if keyword.arg is None:
-                    raise SyntaxError(
-                        "Keyword unpacking is not supported in expressions."
-                    )
                 validate(keyword.value)
             return
         if isinstance(node, ast.Load):
@@ -213,16 +408,30 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 raise ValueError(f"Variable '{node.id}' is not defined.")
             return variable["value"]
         if isinstance(node, ast.List):
-            return [evaluate(item, local_values) for item in node.elts]
+            return _sequence_items(node.elts, lambda item: evaluate(item, local_values))
         if isinstance(node, ast.Tuple):
-            return tuple(evaluate(item, local_values) for item in node.elts)
+            return tuple(
+                _sequence_items(node.elts, lambda item: evaluate(item, local_values))
+            )
         if isinstance(node, ast.Set):
-            return {evaluate(item, local_values) for item in node.elts}
+            return set(
+                _sequence_items(node.elts, lambda item: evaluate(item, local_values))
+            )
         if isinstance(node, ast.Dict):
-            return {
-                evaluate(key, local_values): evaluate(value, local_values)
-                for key, value in zip(node.keys, node.values)
-            }
+            result: dict[Any, Any] = {}
+            for key, value in zip(node.keys, node.values):
+                if key is None:
+                    expanded = evaluate(value, local_values)
+                    if not isinstance(expanded, dict):
+                        raise TypeError(
+                            "Dictionary unpacking requires a dictionary."
+                        )
+                    result.update(expanded)
+                else:
+                    result[evaluate(key, local_values)] = evaluate(
+                        value, local_values
+                    )
+            return result
         if isinstance(node, ast.JoinedStr):
             return "".join(str(evaluate(value, local_values)) for value in node.values)
         if isinstance(node, ast.FormattedValue):
@@ -260,25 +469,57 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 if include_value:
                     result.append(evaluate(node.elt, comprehension_values))
             return result
+        if isinstance(node, ast.Attribute):
+            return _read_attribute(
+                evaluate(node.value, local_values), node.attr
+            )
+        if isinstance(node, ast.Subscript):
+            source = evaluate(node.value, local_values)
+            if isinstance(node.slice, ast.Slice):
+                start = (
+                    evaluate(node.slice.lower, local_values)
+                    if node.slice.lower is not None else None
+                )
+                stop = (
+                    evaluate(node.slice.upper, local_values)
+                    if node.slice.upper is not None else None
+                )
+                step = (
+                    evaluate(node.slice.step, local_values)
+                    if node.slice.step is not None else None
+                )
+                return _read_slice(source, start, stop, step)
+            return _read_index(source, evaluate(node.slice, local_values))
         if isinstance(node, ast.Call):
-            name = _callable_name(node.func)
-            assert name is not None
+            if isinstance(node.func, ast.Attribute):
+                dotted = _callable_name(node.func)
+                first = dotted.split(".")[0] if dotted else None
+                if dotted is not None and (
+                    first is None or runtime.get_var(first) is None
+                ):
+                    name = dotted
+                else:
+                    receiver = evaluate(node.func.value, local_values)
+                    arguments, keyword_arguments = _call_arguments(
+                        node, lambda item: evaluate(item, local_values)
+                    )
+                    method = _method(receiver, node.func.attr)
+                    _validate_mutation(
+                        runtime, receiver, node.func.attr, arguments
+                    )
+                    return method(*arguments, **keyword_arguments)
+            else:
+                name = _callable_name(node.func)
+                assert name is not None
             if name == "set" and not node.args and not node.keywords:
                 return set()
+            arguments, keyword_arguments = _call_arguments(
+                node, lambda item: evaluate(item, local_values)
+            )
             if name == "range":
-                if node.keywords:
+                if keyword_arguments:
                     raise TypeError("range() does not accept named arguments.")
-                return range(
-                    *(evaluate(argument, local_values) for argument in node.args)
-                )
-            arguments = [
-                evaluate(argument, local_values) for argument in node.args
-            ]
-            keyword_arguments = {
-                keyword.arg: evaluate(keyword.value, local_values)
-                for keyword in node.keywords
-                if keyword.arg is not None
-            }
+                return range(*arguments)
             invoker = runtime.function_invoker
             if invoker is None:
                 from .interpreter import _invoke_function

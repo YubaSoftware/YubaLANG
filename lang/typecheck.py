@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from .runtime import TYPES
 from .syntax import tokenize_line
+from .enums import _split_declarations
 from .type_system import TypeSpec, format_type, is_known_type, parse_type
 
 
@@ -582,6 +583,43 @@ def _record_definition(
     return fields, defaults
 
 
+def _match_case_patterns(
+    lines: list[str], start: int
+) -> tuple[list[str], bool]:
+    """Collect patterns and whether an else covers a match block."""
+    patterns: list[str] = []
+    has_else = False
+    depth = 1
+    index = start + 1
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped or stripped.startswith("#"):
+            index += 1
+            continue
+        try:
+            parts = list(tokenize_line(stripped))
+        except SyntaxError:
+            index += 1
+            continue
+        command = parts[0] if parts else ""
+        if command == "match":
+            depth += 1
+        elif command == "endmatch":
+            depth -= 1
+            if depth == 0:
+                break
+        elif depth == 1 and command == "case":
+            pattern = " ".join(parts[1:])
+            if pattern in ("else", "_"):
+                has_else = True
+            elif pattern:
+                patterns.append(pattern)
+        elif depth == 1 and command == "else":
+            has_else = True
+        index += 1
+    return patterns, has_else
+
+
 def check_types_detailed(
     lines: list[str], strict: bool = False
 ) -> list[CheckDiagnostic]:
@@ -642,6 +680,8 @@ def check_types_detailed(
     # Collect record names first so forward record annotations resolve, then
     # parse every declaration against the complete set of record names.
     record_declarations: list[tuple[str, list[str]]] = []
+    enum_names: set[str] = set()
+    enum_variants: dict[str, set[str]] = {}
     for line in lines:
         stripped_line = line.strip()
         if not stripped_line or stripped_line.startswith("#"):
@@ -652,9 +692,22 @@ def check_types_detailed(
             continue
         if len(parts) >= 3 and parts[:2] == ["record", "define"]:
             record_declarations.append((parts[2], parts[3:]))
+        elif (
+            len(parts) >= 3 and parts[:2] == ["enum", "define"]
+            and parts[2].isidentifier()
+        ):
+            enum_names.add(parts[2])
+            variants = {
+                token.partition("(")[0]
+                for token in _split_declarations(" ".join(parts[3:]))
+                if token.partition("(")[0].isidentifier()
+            }
+            enum_variants[parts[2]] = variants
     record_names = {name for name, _ in record_declarations}
     for name, declarations in record_declarations:
-        fields, defaults = _record_definition(declarations, record_names)
+        fields, defaults = _record_definition(
+            declarations, record_names | enum_names
+        )
         record_types[name] = fields
         record_defaults[name] = defaults
 
@@ -675,12 +728,22 @@ def check_types_detailed(
             "catch": "try",
             "finally": "try",
         }
-        end_blocks = {"endif": "if", "endloop": "loop", "endtry": "try"}
+        end_blocks = {
+            "endif": "if", "endloop": "loop", "endtry": "try",
+            "endmatch": "match",
+        }
 
         is_branch = (
-            command in branch_blocks
-            and block_stack
-            and block_stack[-1] == branch_blocks[command]
+            (
+                command in branch_blocks
+                and block_stack
+                and block_stack[-1] == branch_blocks[command]
+            )
+            or (
+                command in ("case", "else")
+                and block_stack
+                and block_stack[-1] == "match"
+            )
         )
         is_end = (
             command in end_blocks
@@ -693,7 +756,9 @@ def check_types_detailed(
             previous_exit
             and not is_branch
             and not is_end
-            and command not in ("elseif", "else", "catch", "finally", "endfunc")
+            and command not in (
+                "elseif", "else", "catch", "finally", "endfunc", "case",
+            )
         ):
             report(
                 line_number,
@@ -774,7 +839,7 @@ def check_types_detailed(
             if return_type:
                 try:
                     return_spec = parse_type(return_type)
-                    if is_known_type(return_spec, set(record_types)):
+                    if is_known_type(return_spec, set(record_types) | enum_names):
                         normalized_return_type = format_type(return_spec)
                 except ValueError:
                     pass
@@ -796,13 +861,13 @@ def check_types_detailed(
                         spec = parse_type(annotation)
                         scopes[-1][name] = (
                             format_type(spec)
-                            if is_known_type(spec, set(record_types))
+                            if is_known_type(spec, set(record_types) | enum_names)
                             else None
                         )
                         parameter_types.append(format_type(spec))
                         named_parameter_types.append((name, format_type(spec)))
                         if strict and not is_known_type(
-                            spec, set(record_types)
+                            spec, set(record_types) | enum_names
                         ):
                             report(
                                 line_number,
@@ -837,7 +902,7 @@ def check_types_detailed(
                     function_spec = parse_type(
                         f"({', '.join(parameter_types)}) -> {normalized_return_type}"
                     )
-                    if is_known_type(function_spec, set(record_types)):
+                    if is_known_type(function_spec, set(record_types) | enum_names):
                         function_types[function_name] = format_type(function_spec)
                     else:
                         function_types[function_name] = None
@@ -954,7 +1019,7 @@ def check_types_detailed(
                 declared_spec = parse_type(declared)
             except ValueError:
                 continue
-            if not is_known_type(declared_spec, set(record_types)):
+            if not is_known_type(declared_spec, set(record_types) | enum_names):
                 continue
             declared = format_type(declared_spec)
             actual = _type_of(
@@ -1019,7 +1084,75 @@ def check_types_detailed(
                     line_number,
                     f"Type mismatch: loop condition has type '{actual}', expected 'bool'.",
                 )
-        block_openers = {"if": "if", "loop": "loop", "try": "try"}
+        if command == "match":
+            subject_type = _type_of(
+                " ".join(parts[1:]), variables, function_types
+            )
+            patterns, has_else = _match_case_patterns(lines, line_number - 1)
+            if subject_type is not None and not has_else:
+                try:
+                    subject_spec = parse_type(subject_type)
+                except ValueError:
+                    subject_spec = None
+                if subject_spec is not None:
+                    if subject_spec.name in enum_variants:
+                        seen: set[str] = set()
+                        for pattern_source in patterns:
+                            if pattern_source == subject_spec.name:
+                                seen.update(enum_variants[subject_spec.name])
+                                continue
+                            enum_pattern = re.match(
+                                r"^([A-Za-z_]\w*)\.([A-Za-z_]\w*)",
+                                pattern_source,
+                            )
+                            if (
+                                enum_pattern is not None
+                                and enum_pattern.group(1) == subject_spec.name
+                            ):
+                                seen.add(enum_pattern.group(2))
+                        missing = enum_variants[subject_spec.name] - seen
+                        if missing:
+                            report(
+                                line_number,
+                                "Non-exhaustive match: missing enum variant(s): "
+                                f"{', '.join(sorted(missing))}.",
+                                "non-exhaustive-match",
+                            )
+                    elif subject_spec.name == "union":
+                        required = {
+                            format_type(member)
+                            for member in subject_spec.arguments
+                            if member.name != "none"
+                            or "none" in {
+                                format_type(option)
+                                for option in subject_spec.arguments
+                            }
+                        }
+                        covered: set[str] = set()
+                        for pattern_source in patterns:
+                            if pattern_source == "_" or pattern_source == "else":
+                                covered.update(required)
+                                continue
+                            literal_type = _literal_type(pattern_source)
+                            if literal_type is not None:
+                                covered.add(literal_type)
+                                continue
+                            try:
+                                pattern_spec = parse_type(pattern_source)
+                            except ValueError:
+                                continue
+                            covered.add(format_type(pattern_spec))
+                        missing = required - covered
+                        if missing:
+                            report(
+                                line_number,
+                                "Non-exhaustive match: missing union member(s): "
+                                f"{', '.join(sorted(missing))}.",
+                                "non-exhaustive-match",
+                            )
+        block_openers = {
+            "if": "if", "loop": "loop", "try": "try", "match": "match",
+        }
         if command in block_openers:
             block_stack.append(block_openers[command])
             scopes.append({})

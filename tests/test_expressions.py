@@ -27,8 +27,6 @@ class ExpressionTests(unittest.TestCase):
     def test_only_supported_expression_syntax_is_accepted(self):
         for source in (
             "1 if true else 0",
-            "x.y",
-            "values[0]",
             "f(*args)",
             "f(**kwargs)",
             "(f() for x in values)",
@@ -38,6 +36,50 @@ class ExpressionTests(unittest.TestCase):
         ):
             with self.subTest(source=source), self.assertRaises(SyntaxError):
                 parse_expression(source)
+
+    def test_attribute_index_slice_and_method_access(self):
+        from lang.runtime import RecordValue
+
+        runtime = Runtime()
+        runtime.define_var("values", "list[int]", [1, 2, 3])
+        runtime.define_var("mapping", "dict[string, int]", {"a": 1})
+        runtime.define_var(
+            "point", "Point", RecordValue("Point", {"x": 4, "y": 5})
+        )
+        self.assertEqual(evaluate_expression("values[0] + values[-1]", runtime), 4)
+        self.assertEqual(evaluate_expression("values[1:3]", runtime), [2, 3])
+        self.assertEqual(evaluate_expression("mapping['a']", runtime), 1)
+        self.assertEqual(evaluate_expression("mapping.a", runtime), 1)
+        self.assertEqual(evaluate_expression("point.x + point.y", runtime), 9)
+        self.assertEqual(
+            evaluate_expression("' Ada '.strip().upper()", runtime), "ADA"
+        )
+        self.assertEqual(
+            evaluate_expression("'a,b'.split(',')", runtime), ["a", "b"]
+        )
+        self.assertEqual(
+            evaluate_expression("'Ada'.startswith('A')", runtime), True
+        )
+        runtime.define_var("mutable", "list[int]", [1])
+        evaluate_expression("mutable.append(2)", runtime)
+        self.assertEqual(evaluate_expression("mutable.pop()", runtime), 2)
+        self.assertEqual(
+            evaluate_expression("mapping.keys()", runtime), ["a"]
+        )
+
+    def test_invalid_access_and_methods_report_source_located_errors(self):
+        from lang.runtime import RecordValue
+
+        runtime = Runtime()
+        runtime.define_var(
+            "point", "Point", RecordValue("Point", {"x": 1})
+        )
+        with self.assertRaisesRegex(AttributeError, "no field named 'y'"):
+            evaluate_expression("point.y", runtime)
+        with self.assertRaisesRegex(AttributeError, "no supported method"):
+            evaluate_expression("'text'.missing()", runtime)
+        with self.assertRaisesRegex(TypeError, "cannot be indexed"):
+            evaluate_expression("5[0]", runtime)
 
     def test_function_calls_are_supported_in_expressions(self):
         output = io.StringIO()
