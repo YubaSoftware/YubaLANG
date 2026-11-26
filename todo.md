@@ -32,43 +32,53 @@ are in the [feature backlog](docs/roadmap/features.md).
   1.4; compatibility matrix and package tests updated.
 - [x] Initial versioned reference, master reference, migration notes, release
   notes, installation guide, and tool guides updated for delivered work.
+- [x] Milestone 1 language ergonomics: expression access, indexing, slicing, and
+  methods; `loop for` iteration and destructuring; enums, `match`/`case`, type
+  aliases, lambdas, `define const`, immutable record fields, compound
+  assignment, optional chaining, null-coalescing, and `*`/`**` unpacking.
+  Generics, record methods, generators, and cleanup/defer remain deferred with
+  documented rationale.
 
 ## Milestone 1 - Language ergonomics
 
-- [ ] Support attribute access, index access, and method calls in expressions,
+- [x] Support attribute access, index access, and method calls in expressions,
   including chained receivers, with source-located diagnostics for unsupported
   receivers.
-- [ ] Add `loop for <name> in <iterable>` iteration, including tuple
+- [x] Add `loop for <name> in <iterable>` iteration, including tuple
   destructuring and `break`/`continue` behavior, and keep the count and `while`
   forms unchanged.
-- [ ] Add destructuring declarations and assignments for tuples and lists,
+- [x] Add destructuring declarations and assignments for tuples and lists,
   including mismatched-arity and type diagnostics.
-- [ ] Add `match`/`case` with literal, tuple, type, and enum patterns plus an
+- [x] Add `match`/`case` with literal, tuple, type, and enum patterns plus an
   optional `else`, and diagnose non-exhaustive matches over enums and unions.
-- [ ] Add enums and sum types with payload variants, construction, equality,
+- [x] Add enums and sum types with payload variants, construction, equality,
   display, and runtime type checks.
-- [ ] Add type aliases usable in annotations, records, generics, and function
-  signatures.
+- [x] Add type aliases usable in annotations, records, and function signatures.
+  Generic parameters and generic aliases remain unsupported in 1.4.
 - [ ] Add user-defined generic functions and records with explicit type
-  parameters, inference at call sites, and documented variance rules.
-- [ ] Add lambdas/anonymous functions usable as `map`/`filter`/`sorted`
+  parameters, inference at call sites, and documented variance rules. Deferred:
+  requires a variance and inference proposal.
+- [x] Add lambdas/anonymous functions usable as `map`/`filter`/`sorted`
   callbacks and as values of function types.
-- [ ] Add `define const` and immutable record fields, with reassignment
+- [x] Add `define const` and immutable record fields, with reassignment
   diagnostics in both the checker and the runtime.
-- [ ] Add compound assignment operators (`set x += y` and the other arithmetic
+- [x] Add compound assignment operators (`set x += y` and the other arithmetic
   and bitwise forms) with the same type rules as `set`.
-- [ ] Add optional chaining and null-coalescing (`?.`, `?:`) with option-type
+- [x] Add optional chaining and null-coalescing (`?.`, `?:`) with option-type
   narrowing.
-- [ ] Add argument and literal unpacking (`*`/`**`) to expression calls and
+- [x] Add argument and literal unpacking (`*`/`**`) to expression calls and
   collection literals.
 - [ ] Write and accept a proposal for record methods and constructors covering
   receiver semantics, mutation, visibility, equality, and compatibility.
+  Deferred: needs a separate receiver/mutation proposal.
 - [ ] Implement record methods and code-running constructors per the accepted
-  proposal.
+  proposal. Deferred with the proposal.
 - [ ] Add generators/`yield` and lazy iterators, and define how they interact
-  with the resource protocol and early loop exit.
+  with the resource protocol and early loop exit. Deferred: cleanup and early
+  exit semantics need a proposal.
 - [ ] Add a language-level cleanup/defer form for resource-bearing values only
-  if the general runtime resource protocol proves insufficient.
+  if the general runtime resource protocol proves insufficient. Deferred: the
+  runtime protocol currently covers tracked resources.
 
 ## Milestone 2 - Types and diagnostics
 

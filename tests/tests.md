@@ -380,6 +380,74 @@ Expected: an unknown-command error.
 
 ---
 
+## Test 24 — Collection Iteration
+
+```hl
+loop for (key, value) in {"a": 1, "b": 2}
+    text output key
+endloop
+```
+
+Expected output:
+
+```text
+a
+b
+```
+
+---
+
+## Test 25 — Enums and Matching
+
+```hl
+enum define Result ok(value: int) error(message: string)
+enum create Result.ok success 42
+match success
+    case Result.ok(value)
+        text output value
+    case Result.error(message)
+        text output message
+endmatch
+```
+
+Expected output:
+
+```text
+42
+```
+
+---
+
+## Test 26 — Expression Access and Lambdas
+
+```hl
+define var names: list[string] = ["Ada", "Grace"]
+define var numbers: list[int] = [1, 2]
+define var double: (int) -> int = lambda value: value * 2
+text output names[0].upper()
+text output map(double, numbers)
+```
+
+Expected output:
+
+```text
+ADA
+[2, 4]
+```
+
+---
+
+## Test 27 — Constants
+
+```hl
+define const limit: int = 3
+set limit = 4
+```
+
+Expected: a constant-reassignment error.
+
+---
+
 # New User Acceptance Criteria
 
 YubaLANG passes the new-user test set when:
@@ -392,8 +460,11 @@ YubaLANG passes the new-user test set when:
 * Conditional blocks work.
 * Functions can be defined and called.
 * `return` works.
-* Loops work.
-* Lists work.
+* Loops work, including `loop for ... in`.
+* Lists work, including indexing, slicing, and destructuring.
+* Enums, type aliases, and `match`/`case` work.
+* Lambdas, optional chaining, and unpacking work.
+* Constants reject reassignment.
 * Input and output work.
 * `wait` works.
 * Invalid programs produce understandable runtime errors.

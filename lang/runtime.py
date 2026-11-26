@@ -56,6 +56,22 @@ class RecordValue:
 
 
 @dataclass
+class LambdaValue:
+    """An anonymous expression function."""
+
+    parameters: tuple[str, ...]
+    invoke: Callable[..., Any]
+
+    def __call__(self, *arguments: Any) -> Any:
+        if len(arguments) != len(self.parameters):
+            raise TypeError(
+                f"Anonymous function expects {len(self.parameters)} "
+                f"argument(s), but got {len(arguments)}."
+            )
+        return self.invoke(*arguments)
+
+
+@dataclass
 class EnumVariantDefinition:
     fields: list[tuple[str, str]] = field(default_factory=list)
 
@@ -342,6 +358,8 @@ class Runtime:
         if spec.name in self.enums:
             return isinstance(value, EnumValue) and value.enum_type == spec.name
         if spec.name == "function":
+            if isinstance(value, LambdaValue):
+                return len(value.parameters) == len(spec.arguments) - 1
             if not isinstance(value, FunctionReference):
                 return False
             function = value.target or self.get_function(value.name)
@@ -431,7 +449,7 @@ class Runtime:
 
     @staticmethod
     def type_name(value: Any) -> str:
-        if isinstance(value, FunctionReference):
+        if isinstance(value, (FunctionReference, LambdaValue)):
             return "function"
         if isinstance(value, EnumValue):
             return value.enum_type

@@ -22,6 +22,7 @@ release is planned in the [1.5 roadmap](roadmap/1.5.md).
 - [Control flow](#control-flow)
 - [Functions](#functions)
 - [Records](#records)
+- [Enums and matching](#enums-and-matching)
 - [Errors, assertions, and cleanup](#errors-assertions-and-cleanup)
 - [Modules and packages](#modules-and-packages)
 - [Standard library](#standard-library)
@@ -114,6 +115,28 @@ define var payload: bytes = "hello"
 define var buffer: bytearray = "hello"
 ```
 
+`define const` declares a constant that cannot be reassigned or converted:
+
+```hl
+define const limit: int = 3
+```
+
+Declarations and assignments may destructure a tuple or list. The target count
+must match the sequence length:
+
+```hl
+define var (left, right): tuple[int, int] = (1, 2)
+set (left, right) = (right, left)
+```
+
+A type alias names an existing type. Aliases must be declared before use and
+cannot refer to themselves:
+
+```hl
+type define Number = int | float
+type define Names = list[string]
+```
+
 ### Built-in types
 
 | Type | Description |
@@ -200,9 +223,10 @@ precedence and grammar are specified in the
 Expressions may also call user-defined functions and imported standard-library
 functions by name or qualified name, with positional or `name=value` keyword
 arguments. `range(...)` and the empty `set()` constructor remain expression
-forms. Attribute/index expressions, method receivers, `*`/`**` unpacking, and
-calls on call results are not supported. See
-[function calls in expressions](1.4-docs.md#expressions-and-assignment).
+forms. Attribute access, indexing, slicing, method calls, chained receivers,
+lambdas, optional chaining (`?.` and `?.[...]`/`?.(...)`), null-coalescing
+(`?:`), and `*`/`**` unpacking are supported. See
+[expressions and assignment](1.4-docs.md#expressions-and-assignment).
 
 `set <variable> = <expression>` assigns to an existing variable without
 changing its declared type:
@@ -212,6 +236,25 @@ define var base: int = 3
 define var result: int = 0
 set result = (base + 2) ** 2
 text output result
+```
+
+Compound forms `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `**=`, `&=`, `|=`, `^=`,
+`<<=`, and `>>=` compute with Python arithmetic or bitwise semantics and then
+apply the declared-type rules. Constants reject every assignment form.
+
+Anonymous functions use `lambda` with positional parameters only; `map`,
+`filter`, and `sorted` accept function references, lambdas, or function-valued
+variables. Unpacking uses `*` for sequences and `**` for mappings in calls and
+literals. Optional chaining returns `none` when the receiver is `none`, and
+`?:` returns its right operand only when its left operand is `none`:
+
+```hl
+define var double: (int) -> int = lambda value: value * 2
+define var values: list[int] = [1, 2]
+define var maybe: string | none = none
+text output map(double, values)
+text output [*values, 3]
+text output maybe ?: "fallback"
 ```
 
 The expression subset is available in initializers, assignments, returns,
@@ -370,11 +413,16 @@ loop for <integer-count-or-variable>
     ...
 endloop
 
+loop for <target> in <iterable>
+    ...
+endloop
+
 loop while <boolean-literal-or-variable>
     ...
 endloop
 ```
 
+The `<target>` may be an identifier or a tuple/list destructuring pattern.
 `break` exits the innermost loop. `continue` starts its next iteration.
 `return` exits the current function.
 
@@ -462,8 +510,46 @@ reports missing required fields, unknown names, duplicates, positional values
 after named values, and type mismatches. `getattr`, `hasattr`, and `setattr`
 work with records. Construction and mutation check declared field types, with
 integer-to-float widening for `float` fields. Same-type records compare
-structurally. Assigning a record aliases the same mutable value. Record
-methods, inheritance, and code-running constructors remain unspecified.
+structurally. Assigning a record aliases the same mutable value. A `const` marker
+before a field declaration makes that field immutable after construction, so
+`setattr` reports `constant-reassignment`. Record methods, inheritance, and
+code-running constructors remain unspecified.
+
+## Enums and matching
+
+Define an enum with variants, optionally carrying typed payload fields, and
+construct values with `enum create` or fieldless `enum value`:
+
+```hl
+enum define Result ok(value: int) error(message: string) pending
+enum create Result.ok success 42
+enum value Result.pending idle
+```
+
+Enum values compare by type, variant, and payload. Payloads are type-checked at
+construction, and unknown types or variants are rejected. `match` selects the
+first matching `case`; `else` handles the rest:
+
+```hl
+match success
+    case Result.ok(value)
+        text output value
+    case Result.error(message)
+        text output message
+    else
+        text output "other"
+endmatch
+```
+
+Patterns may be literals, identifiers (binding the value), type names,
+tuples/lists, or enum variants with payload bindings. `_` is a non-binding
+wildcard. A match with no matching case and no `else` reports
+`non-exhaustive-match`; a malformed pattern reports `invalid-pattern`. The
+static checker reports `non-exhaustive-match` when an enum match omits variants
+and has no `else`.
+
+User-defined generics, record methods, generators/`yield`, and language-level
+cleanup/defer blocks are not supported in 1.4.
 
 ## Errors, assertions, and cleanup
 
@@ -692,12 +778,13 @@ trusted libraries. See the [C ABI guide](features/c-abi.md).
   container without deep-copying its elements, so a tuple may contain shared
   mutable values.
 - Function calls in expressions support user-defined and imported
-  standard-library functions, plus `range(...)` and `set()`. Attribute/index
-  expressions, method receivers, and argument unpacking remain unsupported.
-  Static inference is conservative, and dynamic values may evade static
-  diagnostics while remaining subject to runtime checks.
-- There is no bytecode compiler, project build command, record methods or
-  inheritance, or asynchronous runtime.
+  standard-library functions, plus `range(...)` and `set()`. Expressions also
+  support attribute/index/slice access, method receivers, lambdas, optional
+  chaining, null-coalescing, and `*`/`**` unpacking. Static inference is
+  conservative, and dynamic values may evade static diagnostics while remaining
+  subject to runtime checks.
+- There is no bytecode compiler, project build command, user-defined generics,
+  record methods or inheritance, generators, or asynchronous runtime.
 - Resources registered with the runtime are closed deterministically in reverse
   order; resource-backed iterators and native handles do not yet have a
   language-level protocol.

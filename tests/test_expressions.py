@@ -27,8 +27,6 @@ class ExpressionTests(unittest.TestCase):
     def test_only_supported_expression_syntax_is_accepted(self):
         for source in (
             "1 if true else 0",
-            "f(*args)",
-            "f(**kwargs)",
             "(f() for x in values)",
             "range()",
             "range(1, 2, 3, 4)",
@@ -65,6 +63,29 @@ class ExpressionTests(unittest.TestCase):
         self.assertEqual(evaluate_expression("mutable.pop()", runtime), 2)
         self.assertEqual(
             evaluate_expression("mapping.keys()", runtime), ["a"]
+        )
+
+    def test_argument_and_literal_unpacking(self):
+        runtime = Runtime()
+        runtime.define_var("values", "list[int]", [1, 2])
+        runtime.define_var("extra", "dict[string, int]", {"c": 3})
+        self.assertEqual(
+            evaluate_expression("[*values, 3]", runtime), [1, 2, 3]
+        )
+        self.assertEqual(
+            evaluate_expression("(*values, 3)", runtime), (1, 2, 3)
+        )
+        self.assertEqual(
+            evaluate_expression("{**extra, 'd': 4}", runtime),
+            {"c": 3, "d": 4},
+        )
+        from lang.runtime import UserFunction
+
+        runtime.functions["sum3"] = UserFunction(
+            ["a", "b", "c"], ["return a + b + c"]
+        )
+        self.assertEqual(
+            evaluate_expression("sum3(*values, c=3)", runtime), 6
         )
 
     def test_invalid_access_and_methods_report_source_located_errors(self):

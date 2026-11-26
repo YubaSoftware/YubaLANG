@@ -5,7 +5,7 @@ import operator
 import re
 from typing import Any, Callable
 
-from .runtime import RecordValue, Runtime
+from .runtime import LambdaValue, RecordValue, Runtime
 
 
 _STRING_METHODS = frozenset({
@@ -257,9 +257,146 @@ def _call_arguments(node: ast.Call, evaluate) -> tuple[list[Any], dict[str, Any]
     return arguments, keyword_arguments
 
 
+def _invoke_callback(runtime: Runtime, callback: Any, value: Any) -> Any:
+    if isinstance(callback, LambdaValue):
+        return callback(value)
+    from .type_system import FunctionReference
+
+    if isinstance(callback, FunctionReference):
+        invoker = runtime.function_invoker
+        if invoker is None:
+            from .interpreter import _invoke_function
+
+            invoker = lambda name, args, kwargs: _invoke_function(
+                name, args, runtime, kwargs
+            )
+        return invoker(callback.name, [value], {})
+    if callable(callback):
+        return callback(value)
+    raise TypeError(
+        "map(), filter(), and sorted() callbacks must be functions."
+    )
+
+
+def _expression_collection_builtin(
+    name: str,
+    arguments: list[Any],
+    keyword_arguments: dict[str, Any],
+    runtime: Runtime,
+) -> Any:
+    if name == "map":
+        if len(arguments) != 2 or keyword_arguments:
+            raise TypeError("map() requires a callback and an iterable.")
+        callback, iterable = arguments
+        return [
+            _invoke_callback(runtime, callback, item) for item in iterable
+        ]
+    if name == "filter":
+        if len(arguments) != 2 or keyword_arguments:
+            raise TypeError("filter() requires a callback and an iterable.")
+        callback, iterable = arguments
+        return [
+            item for item in iterable
+            if _invoke_callback(runtime, callback, item)
+        ]
+    if len(arguments) != 1:
+        raise TypeError("sorted() requires exactly one iterable argument.")
+    iterable = arguments[0]
+    unexpected = set(keyword_arguments) - {"key", "reverse"}
+    if unexpected:
+        raise TypeError(
+            f"sorted() got unexpected keyword arguments: "
+            f"{', '.join(sorted(unexpected))}."
+        )
+    key = keyword_arguments.get("key")
+    reverse = keyword_arguments.get("reverse", False)
+    if not isinstance(reverse, bool):
+        raise TypeError("sorted() reverse option must be boolean.")
+    if key is None:
+        return sorted(iterable, reverse=reverse)
+    return sorted(
+        iterable,
+        key=lambda item: _invoke_callback(runtime, key, item),
+        reverse=reverse,
+    )
+
+
+_OPTIONAL_MARKER = "__yl_optional__"
+
+
+def _rewrite_coalesce(source: str) -> str:
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    index = 0
+    while index < len(source) - 1:
+        character = source[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in ("'", '"'):
+            quote = character
+            index += 1
+            continue
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+        elif depth == 0 and source[index:index + 2] == "?:":
+            left = _rewrite_coalesce(source[:index]).strip()
+            right = _rewrite_coalesce(source[index + 2:]).strip()
+            return f"__yl_coalesce({left}, {right})"
+        index += 1
+    return source
+
+
+def _rewrite_optional(source: str) -> str:
+    result: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(source):
+        character = source[index]
+        if quote is not None:
+            result.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in ("'", '"'):
+            quote = character
+            result.append(character)
+            index += 1
+            continue
+        if source[index:index + 2] == "?.":
+            following = source[index + 2:index + 3]
+            if following in ("[", "("):
+                result.append(f".{_OPTIONAL_MARKER}")
+            else:
+                result.append(f".{_OPTIONAL_MARKER}.")
+            index += 2
+            continue
+        result.append(character)
+        index += 1
+    return "".join(result)
+
+
 def parse_expression(source: str) -> ast.expr:
     try:
-        expression = ast.parse(_normalize(source), mode="eval").body
+        expression = ast.parse(
+            _normalize(_rewrite_optional(_rewrite_coalesce(source))),
+            mode="eval",
+        ).body
     except SyntaxError as error:
         raise SyntaxError(f"Invalid expression: {error.msg}.") from error
 
@@ -345,15 +482,35 @@ def parse_expression(source: str) -> ast.expr:
                 if value is not None:
                     validate(value)
             return
+        if isinstance(node, ast.Lambda):
+            if (
+                node.args.vararg is not None
+                or node.args.kwarg is not None
+                or node.args.kwonlyargs
+                or node.args.posonlyargs
+                or node.args.defaults
+            ):
+                raise SyntaxError(
+                    "Anonymous functions require simple positional parameters."
+                )
+            for argument in node.args.args:
+                if argument.annotation is not None:
+                    raise SyntaxError(
+                        "Anonymous function parameters cannot have annotations."
+                    )
+            validate(node.body)
+            return
         if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Attribute):
+            if isinstance(node.func, ast.Lambda):
+                validate(node.func)
+            elif isinstance(node.func, ast.Attribute):
                 validate(node.func.value)
             else:
                 name = _callable_name(node.func)
                 if name is None:
                     raise SyntaxError(
                         "Function calls in expressions require a name, "
-                        "qualified name, or method receiver."
+                        "qualified name, method receiver, or anonymous function."
                     )
             name = (
                 _callable_name(node.func)
@@ -470,11 +627,27 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                     result.append(evaluate(node.elt, comprehension_values))
             return result
         if isinstance(node, ast.Attribute):
+            if (
+                isinstance(node.value, ast.Attribute)
+                and node.value.attr == _OPTIONAL_MARKER
+            ):
+                base = evaluate(node.value.value, local_values)
+                if base is None:
+                    return None
+                return _read_attribute(base, node.attr)
             return _read_attribute(
                 evaluate(node.value, local_values), node.attr
             )
         if isinstance(node, ast.Subscript):
-            source = evaluate(node.value, local_values)
+            if (
+                isinstance(node.value, ast.Attribute)
+                and node.value.attr == _OPTIONAL_MARKER
+            ):
+                source = evaluate(node.value.value, local_values)
+                if source is None:
+                    return None
+            else:
+                source = evaluate(node.value, local_values)
             if isinstance(node.slice, ast.Slice):
                 start = (
                     evaluate(node.slice.lower, local_values)
@@ -490,7 +663,62 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 )
                 return _read_slice(source, start, stop, step)
             return _read_index(source, evaluate(node.slice, local_values))
+        if isinstance(node, ast.Lambda):
+            parameters = tuple(
+                argument.arg for argument in node.args.args
+            )
+            closure = dict(local_values or ())
+
+            def invoke(*arguments: Any) -> Any:
+                values = dict(closure)
+                values.update(zip(parameters, arguments))
+                return evaluate(node.body, values)
+
+            return LambdaValue(parameters, invoke)
         if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == _OPTIONAL_MARKER
+            ):
+                function_value = evaluate(node.func.value, local_values)
+                if function_value is None:
+                    return None
+                arguments, keyword_arguments = _call_arguments(
+                    node, lambda item: evaluate(item, local_values)
+                )
+                if keyword_arguments:
+                    raise TypeError(
+                        "Optional calls do not accept named arguments."
+                    )
+                if not callable(function_value):
+                    raise TypeError("Optional call target is not callable.")
+                return function_value(*arguments)
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == _OPTIONAL_MARKER
+            ):
+                receiver = evaluate(node.func.value.value, local_values)
+                if receiver is None:
+                    return None
+                arguments, keyword_arguments = _call_arguments(
+                    node, lambda item: evaluate(item, local_values)
+                )
+                method = _method(receiver, node.func.attr)
+                _validate_mutation(
+                    runtime, receiver, node.func.attr, arguments
+                )
+                return method(*arguments, **keyword_arguments)
+            if isinstance(node.func, ast.Lambda):
+                function_value = evaluate(node.func, local_values)
+                arguments, keyword_arguments = _call_arguments(
+                    node, lambda item: evaluate(item, local_values)
+                )
+                if keyword_arguments:
+                    raise TypeError(
+                        "Anonymous functions do not accept named arguments."
+                    )
+                return function_value(*arguments)
             if isinstance(node.func, ast.Attribute):
                 dotted = _callable_name(node.func)
                 first = dotted.split(".")[0] if dotted else None
@@ -513,6 +741,18 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 assert name is not None
             if name == "set" and not node.args and not node.keywords:
                 return set()
+            if name == "__yl_coalesce":
+                if (
+                    len(node.args) != 2
+                    or node.keywords
+                ):
+                    raise SyntaxError(
+                        "Null-coalescing requires two operands."
+                    )
+                left_value = evaluate(node.args[0], local_values)
+                if left_value is not None:
+                    return left_value
+                return evaluate(node.args[1], local_values)
             arguments, keyword_arguments = _call_arguments(
                 node, lambda item: evaluate(item, local_values)
             )
@@ -520,6 +760,29 @@ def evaluate_expression(source: str, runtime: Runtime) -> Any:
                 if keyword_arguments:
                     raise TypeError("range() does not accept named arguments.")
                 return range(*arguments)
+            if local_values is not None and name in local_values and isinstance(
+                local_values[name], LambdaValue
+            ):
+                if keyword_arguments:
+                    raise TypeError(
+                        "Anonymous functions do not accept named arguments."
+                    )
+                return local_values[name](*arguments)
+            variable = runtime.get_var(name)
+            if variable is not None and isinstance(
+                variable["value"], LambdaValue
+            ):
+                if keyword_arguments:
+                    raise TypeError(
+                        "Anonymous functions do not accept named arguments."
+                    )
+                return variable["value"](*arguments)
+            if runtime.resolve_function(name) is None and name in (
+                "map", "filter", "sorted",
+            ):
+                return _expression_collection_builtin(
+                    name, arguments, keyword_arguments, runtime
+                )
             invoker = runtime.function_invoker
             if invoker is None:
                 from .interpreter import _invoke_function

@@ -48,6 +48,28 @@ class FormatterTests(unittest.TestCase):
         with self.assertRaisesRegex(FormatError, r"line 1: endif without a matching block"):
             format_source("endif\n")
 
+    def test_formats_match_blocks(self):
+        self.assertEqual(
+            format_source(
+                'match value\n'
+                'case 1\n'
+                'text output "one"\n'
+                'case 2\n'
+                '  text output "two"\n'
+                'else\n'
+                'text output "other"\n'
+                'endmatch\n'
+            ),
+            'match value\n'
+            '    case 1\n'
+            '        text output "one"\n'
+            '    case 2\n'
+            '        text output "two"\n'
+            '    else\n'
+            '        text output "other"\n'
+            'endmatch\n',
+        )
+
     def test_formats_exception_blocks(self):
         self.assertEqual(
             format_source(

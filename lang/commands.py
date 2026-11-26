@@ -10,7 +10,13 @@ from .expressions import evaluate_expression
 from .ffi import execute_ffi
 from .io_commands import execute_io_command
 from .patterns import parse_pattern, pattern_names, unpack_pattern
-from .runtime import RecordDefinition, RecordValue, Runtime, TYPES
+from .runtime import (
+    LambdaValue,
+    RecordDefinition,
+    RecordValue,
+    Runtime,
+    TYPES,
+)
 from .string_builtins import resolve
 from .type_system import FunctionReference, format_type, parse_type
 
@@ -252,7 +258,7 @@ def execute_command(
         execute_enum_command(parts, runtime)
         return
 
-    if command == "type":
+    if command == "type" and len(parts) >= 2 and parts[1] in ("define", "alias"):
         execute_type_command(parts, runtime)
         return
 
@@ -395,13 +401,21 @@ def execute_command(
             raise SyntaxError(f"Usage: {command} <function> <iterable> <dest_list>")
         function_name, iterable, destination = parts[1], resolve(parts[2], runtime), parts[3]
         callback_variable = runtime.get_var(function_name)
+        lambda_callback = None
         if (
+            callback_variable is not None
+            and isinstance(callback_variable["value"], LambdaValue)
+        ):
+            lambda_callback = callback_variable["value"]
+        elif (
             callback_variable is not None
             and isinstance(callback_variable["value"], FunctionReference)
         ):
             function_name = callback_variable["value"].name
 
         def callback(value: Any) -> Any:
+            if lambda_callback is not None:
+                return lambda_callback(value)
             if runtime.resolve_function(function_name) is not None:
                 result = invoke_function(function_name, [value])
                 if result is None:

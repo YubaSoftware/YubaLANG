@@ -1,6 +1,6 @@
 from typing import Any
 
-from .runtime import TYPES, EnumValue, RecordValue, Runtime
+from .runtime import TYPES, EnumValue, LambdaValue, RecordValue, Runtime
 from .expressions import evaluate_expression
 from .type_system import FunctionReference, format_type, parse_type
 
@@ -26,8 +26,14 @@ def parse_value(value: str, expected_type: str, runtime: Runtime) -> Any:
         return candidate
 
     if spec.name == "function":
-        if data is not None and isinstance(data["value"], FunctionReference):
+        if data is not None and isinstance(
+            data["value"], (FunctionReference, LambdaValue)
+        ):
             function = data["value"]
+        elif value.strip().startswith("lambda "):
+            function = evaluate_expression(value, runtime)
+            if not isinstance(function, LambdaValue):
+                raise TypeError("Expected an anonymous function.")
         else:
             resolved = runtime.resolve_function(value)
             if resolved is None:

@@ -105,6 +105,14 @@ _STATIC = (
         "func define parse value:mystery\nendfunc",
     ),
     DiagnosticInfo(
+        "constant-reassignment",
+        "error",
+        "Constant reassignment",
+        "A variable declared with define const, or an immutable record field, "
+        "cannot be reassigned or converted.",
+        "define const limit: int = 1\nset limit = 2",
+    ),
+    DiagnosticInfo(
         "non-exhaustive-match",
         "error",
         "Non-exhaustive match",
@@ -414,6 +422,10 @@ _ASSIGNMENT = re.compile(
     r"Mutation would violate collection type|"
     r"Cannot convert '[^']+' to )"
 )
+_CONSTANT = re.compile(
+    r"^(?:Cannot reassign constant|Cannot redeclare constant|"
+    r"Field '[^']+' of record '[^']+' is immutable\.)"
+)
 _CONDITION = re.compile(
     r"^(?:Condition must evaluate to a boolean\.|"
     r"Assertion condition must be a boolean\.|"
@@ -436,6 +448,11 @@ _ARITHMETIC = re.compile(
 _RECORD = re.compile(
     r"^(?:Unknown record type:|Record field|Record '[^']+'|"
     r"Record creation|record )"
+)
+_MATCH = re.compile(
+    r"^(?:match is not exhaustive|Enum .* pattern|"
+    r"Case patterns|Invalid case pattern|A case pattern|"
+    r"A match block|Missing endmatch)"
 )
 _IMPORT = re.compile(
     r"^(?:Module '[^']+' was not found|Cannot read module|"
@@ -488,6 +505,8 @@ def code_for_runtime(error: BaseException) -> str:
         return "function-arguments"
     if _FUNCTION_RETURN.match(message):
         return "function-return"
+    if _CONSTANT.match(message):
+        return "constant-reassignment"
     if _ASSIGNMENT.match(message):
         return "assignment-type"
     if _CONDITION.match(message):
@@ -496,6 +515,12 @@ def code_for_runtime(error: BaseException) -> str:
         return "collection-type"
     if _ARITHMETIC.match(message):
         return "arithmetic-error"
+    if _MATCH.match(message):
+        return (
+            "non-exhaustive-match"
+            if "match is not exhaustive" in message
+            else "invalid-pattern"
+        )
     if _RECORD.match(message):
         return "record-error"
     if _IMPORT.match(message):

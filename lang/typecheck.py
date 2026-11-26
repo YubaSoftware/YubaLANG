@@ -562,8 +562,28 @@ def _result_type(
     return None
 
 
+def _expand_aliases(
+    spec: TypeSpec,
+    aliases: dict[str, TypeSpec],
+    seen: frozenset[str] = frozenset(),
+) -> TypeSpec:
+    """Replace alias names with their declared types."""
+    if spec.name in aliases and spec.name not in seen:
+        return _expand_aliases(
+            aliases[spec.name], aliases, seen | {spec.name}
+        )
+    if not spec.arguments:
+        return spec
+    return TypeSpec(
+        spec.name,
+        tuple(_expand_aliases(item, aliases, seen) for item in spec.arguments),
+    )
+
+
 def _record_definition(
-    declarations: list[str], known_records: set[str]
+    declarations: list[str],
+    known_records: set[str],
+    aliases: dict[str, TypeSpec] | None = None,
 ) -> tuple[dict[str, str], set[str]]:
     fields: dict[str, str] = {}
     defaults: set[str] = set()
@@ -576,6 +596,8 @@ def _record_definition(
             spec = parse_type(type_source)
         except ValueError:
             continue
+        if aliases:
+            spec = _expand_aliases(spec, aliases)
         if is_known_type(spec, known_records):
             fields[field_name] = format_type(spec)
             if default_separator:
@@ -634,6 +656,7 @@ def check_types_detailed(
     function_types: dict[str, str | None] = {}
     function_parameters: dict[str, list[tuple[str, str | None]]] = {}
     function_returns: list[str | None] = []
+    constants: set[str] = set()
     function_depth = 0
     block_stack: list[str] = []
     block_info: list[dict[str, object]] = []
@@ -680,6 +703,7 @@ def check_types_detailed(
     # Collect record names first so forward record annotations resolve, then
     # parse every declaration against the complete set of record names.
     record_declarations: list[tuple[str, list[str]]] = []
+    alias_declarations: list[tuple[str, str]] = []
     enum_names: set[str] = set()
     enum_variants: dict[str, set[str]] = {}
     for line in lines:
@@ -703,10 +727,31 @@ def check_types_detailed(
                 if token.partition("(")[0].isidentifier()
             }
             enum_variants[parts[2]] = variants
+        elif (
+            len(parts) >= 5 and parts[0] == "type"
+            and parts[1] in ("define", "alias") and parts[2].isidentifier()
+            and "=" in parts
+        ):
+            equal_index = parts.index("=")
+            alias_declarations.append(
+                (parts[2], " ".join(parts[equal_index + 1:]))
+            )
     record_names = {name for name, _ in record_declarations}
+    aliases: dict[str, TypeSpec] = {}
+    for alias_name, alias_source in alias_declarations:
+        try:
+            alias_spec = parse_type(alias_source)
+        except ValueError:
+            continue
+        alias_spec = _expand_aliases(alias_spec, aliases)
+        if is_known_type(
+            alias_spec, record_names | enum_names | set(aliases)
+        ):
+            aliases[alias_name] = alias_spec
+    alias_names = set(aliases)
     for name, declarations in record_declarations:
         fields, defaults = _record_definition(
-            declarations, record_names | enum_names
+            declarations, record_names | enum_names | alias_names, aliases
         )
         record_types[name] = fields
         record_defaults[name] = defaults
@@ -836,10 +881,13 @@ def check_types_detailed(
                 return_type = " ".join(declarations[return_index + 1:])
                 declarations = declarations[:return_index]
             normalized_return_type = None
+            known_types = set(record_types) | enum_names | alias_names
             if return_type:
                 try:
-                    return_spec = parse_type(return_type)
-                    if is_known_type(return_spec, set(record_types) | enum_names):
+                    return_spec = _expand_aliases(
+                        parse_type(return_type), aliases
+                    )
+                    if is_known_type(return_spec, known_types):
                         normalized_return_type = format_type(return_spec)
                 except ValueError:
                     pass
@@ -858,16 +906,16 @@ def check_types_detailed(
                 name, separator, annotation = parameter.partition(":")
                 if separator:
                     try:
-                        spec = parse_type(annotation)
+                        spec = _expand_aliases(parse_type(annotation), aliases)
                         scopes[-1][name] = (
                             format_type(spec)
-                            if is_known_type(spec, set(record_types) | enum_names)
+                            if is_known_type(spec, known_types)
                             else None
                         )
                         parameter_types.append(format_type(spec))
                         named_parameter_types.append((name, format_type(spec)))
                         if strict and not is_known_type(
-                            spec, set(record_types) | enum_names
+                            spec, known_types
                         ):
                             report(
                                 line_number,
@@ -902,7 +950,7 @@ def check_types_detailed(
                     function_spec = parse_type(
                         f"({', '.join(parameter_types)}) -> {normalized_return_type}"
                     )
-                    if is_known_type(function_spec, set(record_types) | enum_names):
+                    if is_known_type(function_spec, known_types):
                         function_types[function_name] = format_type(function_spec)
                     else:
                         function_types[function_name] = None
@@ -931,7 +979,9 @@ def check_types_detailed(
             target[name] = type_name
 
         if parts[0] == "record" and len(parts) >= 3 and parts[1] == "define":
-            fields, defaults = _record_definition(parts[3:], record_names)
+            fields, defaults = _record_definition(
+                parts[3:], record_names | enum_names | alias_names, aliases
+            )
             record_types[parts[2]] = fields
             record_defaults[parts[2]] = defaults
             continue
@@ -1002,12 +1052,15 @@ def check_types_detailed(
                 narrowings[-1].pop(variable_name, None)
             continue
         if (
-            parts[0] == "define" and len(parts) >= 6 and parts[1] == "var"
-            and parts[2].endswith(":") and "=" in parts
+            parts[0] == "define" and len(parts) >= 6
+            and parts[1] in ("var", "const") and parts[2].endswith(":")
+            and "=" in parts
         ):
             equal_index = parts.index("=")
             name = parts[2][:-1]
             declared = " ".join(parts[3:equal_index])
+            if parts[1] == "const":
+                constants.add(name)
             if any(name in scope for scope in scopes[:-1]):
                 report(
                     line_number,
@@ -1016,10 +1069,12 @@ def check_types_detailed(
                     "warning",
                 )
             try:
-                declared_spec = parse_type(declared)
+                declared_spec = _expand_aliases(parse_type(declared), aliases)
             except ValueError:
                 continue
-            if not is_known_type(declared_spec, set(record_types) | enum_names):
+            if not is_known_type(
+                declared_spec, set(record_types) | enum_names | alias_names
+            ):
                 continue
             declared = format_type(declared_spec)
             actual = _type_of(
@@ -1084,12 +1139,31 @@ def check_types_detailed(
                     line_number,
                     f"Type mismatch: loop condition has type '{actual}', expected 'bool'.",
                 )
+        def pattern_binds_anything(pattern_source: str) -> bool:
+            if pattern_source in ("_", "else"):
+                return True
+            if not _IDENTIFIER.fullmatch(pattern_source):
+                return False
+            return (
+                pattern_source not in TYPES
+                and pattern_source not in enum_names
+                and pattern_source not in record_names
+                and pattern_source not in alias_names
+            )
+
         if command == "match":
             subject_type = _type_of(
                 " ".join(parts[1:]), variables, function_types
             )
-            patterns, has_else = _match_case_patterns(lines, line_number - 1)
-            if subject_type is not None and not has_else:
+            patterns, has_else = _match_case_patterns(lines, line_number)
+            if (
+                subject_type is not None
+                and not has_else
+                and not any(
+                    pattern_binds_anything(pattern)
+                    for pattern in patterns
+                )
+            ):
                 try:
                     subject_spec = parse_type(subject_type)
                 except ValueError:
@@ -1174,6 +1248,17 @@ def check_types_detailed(
                 narrowings.append({})
                 block_info.append({"kind": command})
             continue
+        if parts[0] == "set" and len(parts) >= 2:
+            target_name = parts[1]
+            if (
+                target_name.isidentifier()
+                and target_name in constants
+            ):
+                report(
+                    line_number,
+                    f"Cannot reassign constant '{target_name}'.",
+                    "constant-reassignment",
+                )
         if parts[0] == "set" and len(parts) >= 4 and parts[2] == "=":
             destination = parts[1]
             expected = declared_type(destination)

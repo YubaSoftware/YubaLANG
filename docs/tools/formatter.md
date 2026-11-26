@@ -2,9 +2,10 @@
 
 The built-in `fmt` command formats `.yl` files with a consistent style:
 
-- Four spaces per nested `if`, `func define`, or `loop` block.
-- `else` and `elseif` align with their matching `if`; closing statements align
-  with the block's opening statement.
+- Four spaces per nested `if`, `func define`, `loop`, `match`, or `try` block.
+- `else` and `elseif` align with their matching `if`; `case` and a match
+  `else` align inside their `match`; closing statements align with the block's
+  opening statement.
 - Existing blank lines and comments are retained, with indentation normalized.
 - Statement text, including strings and inline comments, is otherwise
   preserved. Write mode uses UTF-8 and a single final LF newline; check mode
@@ -34,7 +35,8 @@ py YubaLANG.py fmt --check .
 Malformed quoting or unclosed/mismatched blocks are reported instead of being
 rewritten. The regression tests parse formatted source and compare execution
 output across expressions, functions with named/default/variadic parameters,
-records, assertions, and exception blocks. Run the formatter tests with:
+records, assertions, exception blocks, and `match` blocks. Run the formatter
+tests with:
 
 ```text
 py -m unittest tests.test_formatter

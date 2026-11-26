@@ -42,7 +42,10 @@ _ARITY: dict[str, tuple[int, ...]] = {
     "vars": (1,), "wait": (2,),
 }
 _HOVER: dict[str, str] = {
-    "define": "**`define var <name>: <type> = <value>`** declares a variable.",
+    "define": (
+        "**`define var <name>: <type> = <value>`** declares a variable; "
+        "**`define const <name>: <type> = <value>`** declares an immutable one."
+    ),
     "assert": "**`assert <boolean> [message]`** raises a source-located error when false.",
     "close": "**`close <file_variable>`** closes an open file.",
     "record": (
@@ -86,8 +89,8 @@ _HOVER: dict[str, str] = {
     "else": "**`else`** adds the fallback branch to an `if` block.",
     "endif": "**`endif`** closes an `if` block.",
     "loop": (
-        "**`loop for <count>`** or **`loop while <condition>`** starts a loop. "
-        "Close it with `endloop`."
+        "**`loop for <count>`**, **`loop for <target> in <iterable>`**, or "
+        "**`loop while <condition>`** starts a loop. Close it with `endloop`."
     ),
     "endloop": "**`endloop`** closes a loop.",
     "return": "**`return [value]`** exits the current function.",
@@ -145,7 +148,25 @@ _HOVER: dict[str, str] = {
         "a sequence slice; start is included and stop is excluded."
     ),
     "sorted": "**`sorted <iterable> <list_destination> [reverse]`** sorts an iterable.",
-    "type": "**`type <variable> <string_destination>`** stores the declared type.",
+    "type": (
+        "**`type <variable> <string_destination>`** stores the declared type; "
+        "**`type define <name> = <type>`** declares a type alias."
+    ),
+    "enum": (
+        "**`enum define <name> <variant>...`** defines an enum; "
+        "**`enum create <type>.<variant> <variable> [values]`** constructs a "
+        "value, and **`enum value <type>.<variant> <variable>`** constructs a "
+        "fieldless value."
+    ),
+    "match": (
+        "**`match <expression>`** starts pattern dispatch. Add `case` branches "
+        "or `else`, then close with `endmatch`."
+    ),
+    "case": (
+        "**`case <pattern>`** adds a match branch; patterns support literals, "
+        "tuples, type names, bindings, and enum variants."
+    ),
+    "endmatch": "**`endmatch`** closes a `match` block.",
     "vars": "**`vars`** prints active variables and functions.",
     "wait": "**`wait <seconds>`** pauses execution.",
     "zip": "**`zip <iterable1> <iterable2> [...] <list_destination>`** combines iterables.",
@@ -503,6 +524,38 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
                 error = "Usage: record create <type> <variable> <field-value>..."
             elif parts[1] == "create" and parts[2] not in record_types:
                 error = f"Unknown record type: {parts[2]}"
+        elif command == "type" and len(parts) >= 2 and parts[1] in ("define", "alias"):
+            equal_index = next(
+                (index for index in range(2, len(parts)) if parts[index] == "="),
+                -1,
+            )
+            if len(parts) < 5 or equal_index < 3:
+                error = "Usage: type define <name> = <type>"
+            elif not _IDENTIFIER.fullmatch(parts[2]):
+                error = "Type alias name must be an identifier."
+            else:
+                type_source = " ".join(parts[equal_index + 1:])
+                try:
+                    alias_type = parse_type(type_source)
+                except ValueError:
+                    alias_type = None
+                if alias_type is None or not is_known_type(
+                    alias_type, set(record_types)
+                ):
+                    code = "unknown-type"
+                    error = f"Unknown type: {type_source}"
+        elif command == "enum":
+            if len(parts) < 3 or parts[1] not in ("define", "create", "value"):
+                error = (
+                    "Usage: enum define <name> <variant>... or "
+                    "enum create <type>.<variant> <variable> [values]"
+                )
+            elif parts[1] == "define" and len(parts) < 4:
+                error = "An enum must declare at least one variant."
+            elif parts[1] in ("create", "value") and (
+                len(parts) < 4 or "." not in parts[2]
+            ):
+                error = "Usage: enum create <type>.<variant> <variable> [values]"
         elif command in _ARITY and len(parts) not in _ARITY[command]:
             error = f"Invalid {command} command or arguments."
         elif command == "import" and len(parts) == 4 and parts[2] != "as":

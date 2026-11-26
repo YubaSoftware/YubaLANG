@@ -37,12 +37,13 @@ LSP uses severity `1` for errors and `2` for warnings.
 | `unreachable-code` | warning | A statement follows an unconditional exit in the same block. |
 | `shadowed-variable` | warning | A block declaration hides an enclosing variable. |
 | `invalid-annotation` | warning | Strict mode found an unknown or unparseable annotation. |
-| `non-exhaustive-match` | error | Reserved for match/case exhaustiveness. |
-| `invalid-pattern` | error | Reserved for invalid match/case patterns. |
+| `constant-reassignment` | error | A `define const` variable or immutable record field was reassigned or converted. |
+| `non-exhaustive-match` | error | A `match` omits enum variants and has no `else`, or no case matched at runtime. |
+| `invalid-pattern` | error | A `match`/`case` pattern is malformed or cannot be applied. |
 
-`non-exhaustive-match` and `invalid-pattern` are registered now so editor and
-CI configuration can name them before the corresponding milestone 1 syntax
-lands. The checker does not emit them yet.
+`constant-reassignment`, `non-exhaustive-match`, and `invalid-pattern` are
+active in both the checker and the runtime for the implemented constant, match,
+and pattern rules.
 
 ## Runtime codes
 
@@ -65,6 +66,9 @@ lands. The checker does not emit them yet.
 | `arithmetic-error` | error | Arithmetic received an unsupported value or domain. |
 | `conversion-error` | error | `convert` could not produce the requested type. |
 | `record-error` | error | A record declaration, construction, or field is invalid. |
+| `constant-reassignment` | error | A constant variable or immutable record field was modified at runtime. |
+| `non-exhaustive-match` | error | No `case` or `else` matched a runtime `match` value. |
+| `invalid-pattern` | error | A `case` pattern is invalid for the matched runtime value. |
 | `assertion-failed` | error | An `assert` condition was false. |
 | `uncaught-exception` | error | A thrown value reached the top level. |
 | `import-cycle` | error | Modules import each other in a cycle. |

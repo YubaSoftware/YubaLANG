@@ -24,7 +24,8 @@ master reference remain at the top level.
 - [Master reference](master-reference.md): language, runtime, commands, and
   developer tools.
 - [1.4 language reference](1.4-docs.md): versioned grammar, expressions,
-  types, control flow, resource lifecycle, and runtime semantics.
+  types, enums, matching, control flow, resource lifecycle, and runtime
+  semantics.
 - [Built-ins](features/builtins.md): function signatures and examples.
 - [Standard library](features/standard-library.md): bundled `std.*` modules,
   API behavior, limits, and stability policy.
