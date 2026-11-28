@@ -102,26 +102,26 @@ are in the [feature backlog](docs/roadmap/features.md).
 
 ## Milestone 3 - Runtime and standard library
 
-- [ ] Add `std.regex` with compiled patterns, matching, replacement, and
+- [x] Add `std.regex` with compiled patterns, matching, replacement, and
   documented backtracking limits.
-- [ ] Add `std.glob` and path-expansion helpers built on `std.fs`.
-- [ ] Add `std.tempfile` with deterministic cleanup through the resource
+- [x] Add `std.glob` and path-expansion helpers built on `std.fs`.
+- [x] Add `std.tempfile` with deterministic cleanup through the resource
   protocol.
-- [ ] Add `std.archive` for zip read/write with path-traversal protection.
-- [ ] Add `std.sqlite` with parameter binding, transactions, and resource
+- [x] Add `std.archive` for zip read/write with path-traversal protection.
+- [x] Add `std.sqlite` with parameter binding, transactions, and resource
   cleanup.
-- [ ] Add `std.uuid`, `std.decimal`, `std.statistics`, `std.logging`,
+- [x] Add `std.uuid`, `std.decimal`, `std.statistics`, `std.logging`,
   `std.terminal`, and `std.env` (environment variables, arguments, and
   working directory) modules.
-- [ ] Extend file I/O with `seek`, `tell`, `readline`, line iteration, buffered
+- [x] Extend file I/O with `seek`, `tell`, `readline`, line iteration, buffered
   reads/writes, binary standard streams, and atomic file replacement.
-- [ ] Add typed error values: catch by error kind, expose stack traces as data,
+- [x] Add typed error values: catch by error kind, expose stack traces as data,
   and support error causes without exposing Python tracebacks.
-- [ ] Make recursion depth, collection size, HTTP bounds, and process limits
+- [x] Make recursion depth, collection size, HTTP bounds, and process limits
   configurable, with documented defaults.
-- [ ] Extend the resource protocol to iterators and native handles, and document
+- [x] Extend the resource protocol to iterators and native handles, and document
   double-close and failure behavior.
-- [ ] Document ordering and hashing guarantees for dictionaries, sets, and
+- [x] Document ordering and hashing guarantees for dictionaries, sets, and
   iteration so programs can rely on deterministic behavior.
 
 ## Milestone 4 - Documentation and developer experience

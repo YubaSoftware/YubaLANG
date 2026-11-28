@@ -27,6 +27,7 @@ TYPES = {
 }
 
 MAX_FUNCTION_CALL_DEPTH = 128
+MAX_COLLECTION_SIZE = 1_000_000
 
 
 class LanguageException(ValueError):
@@ -137,6 +138,16 @@ class Runtime:
     program_args: list[str] = field(default_factory=list)
     clock: Callable[[], float] = time.time
     random_source: random.Random = field(default_factory=random.Random)
+    max_call_depth: int = MAX_FUNCTION_CALL_DEPTH
+    max_collection_size: int = MAX_COLLECTION_SIZE
+    http_default_timeout: float = 10.0
+    http_max_timeout: float = 300.0
+    http_default_max_bytes: int = 1_048_576
+    http_max_bytes: int = 67_108_864
+    process_default_timeout: float = 30.0
+    process_max_timeout: float = 3600.0
+    process_default_max_output_bytes: int = 1_048_576
+    process_max_output_bytes: int = 67_108_864
     module_aliases: dict[str, str] = field(default_factory=dict)
     module_alias_paths: dict[str, str] = field(default_factory=dict)
     loaded_modules: dict[str, str] = field(default_factory=dict)
@@ -153,6 +164,61 @@ class Runtime:
     debugger: DebugHook | None = None
     coverage: CoverageHook | None = None
     function_invoker: Callable[[str, list[Any], dict[str, Any] | None], Any] | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "max_call_depth",
+            "max_collection_size",
+            "http_default_max_bytes",
+            "http_max_bytes",
+            "process_default_max_output_bytes",
+            "process_max_output_bytes",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"Runtime {name} must be a positive integer.")
+        for name in (
+            "http_default_timeout",
+            "http_max_timeout",
+            "process_default_timeout",
+            "process_max_timeout",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                raise ValueError(f"Runtime {name} must be a positive number.")
+        for default_name, maximum_name in (
+            ("http_default_timeout", "http_max_timeout"),
+            ("http_default_max_bytes", "http_max_bytes"),
+            ("process_default_timeout", "process_max_timeout"),
+            ("process_default_max_output_bytes", "process_max_output_bytes"),
+        ):
+            if getattr(self, default_name) > getattr(self, maximum_name):
+                raise ValueError(
+                    f"Runtime {default_name} must not exceed {maximum_name}."
+                )
+
+    def limits(self) -> dict[str, Any]:
+        """Return the configurable host limits as plain data."""
+        return {
+            "max_call_depth": self.max_call_depth,
+            "max_collection_size": self.max_collection_size,
+            "http_default_timeout": self.http_default_timeout,
+            "http_max_timeout": self.http_max_timeout,
+            "http_default_max_bytes": self.http_default_max_bytes,
+            "http_max_bytes": self.http_max_bytes,
+            "process_default_timeout": self.process_default_timeout,
+            "process_max_timeout": self.process_max_timeout,
+            "process_default_max_output_bytes": self.process_default_max_output_bytes,
+            "process_max_output_bytes": self.process_max_output_bytes,
+        }
+
+    def check_collection_size(self, value: Any) -> None:
+        """Reject top-level collections larger than the configured limit."""
+        if isinstance(value, (list, tuple, set, dict)) and len(value) > self.max_collection_size:
+            raise ValueError(
+                f"Collection size {len(value)} exceeds the maximum of "
+                f"{self.max_collection_size}."
+            )
 
     def resolve_function(self, name: str) -> str | None:
         if "." in name:
@@ -202,6 +268,7 @@ class Runtime:
             raise TypeError(
                 f"Cannot redeclare constant '{name}' in the same scope."
             )
+        self.check_collection_size(value)
         self.scopes[-1][name] = {"type": var_type, "value": value}
 
     def define_const(self, name: str, var_type: str, value: Any) -> None:
@@ -315,6 +382,7 @@ class Runtime:
     def update_var(self, name: str, var_type: str, value: Any) -> None:
         if name in self.constants:
             raise TypeError(f"Cannot reassign constant '{name}'.")
+        self.check_collection_size(value)
         start = self.function_scope_starts[-1] if self.function_scope_starts else 0
         target_scope = next(
             (scope for scope in reversed(self.scopes[start:]) if name in scope),
@@ -467,6 +535,7 @@ class Runtime:
         return type(value).__name__
 
     def validate_container_mutation(self, container: Any, candidate: Any) -> None:
+        self.check_collection_size(candidate)
         visited: set[tuple[int, TypeSpec]] = set()
 
         def check(value: Any, spec: TypeSpec) -> bool:

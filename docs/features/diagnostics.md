@@ -81,6 +81,13 @@ and pattern rules.
 | `limit-error` | error | A configured or runtime limit was exceeded. |
 | `stack-overflow` | error | The maximum function call depth was reached. |
 | `memory-limit` | error | The host could not allocate memory. |
+| `regex-error` | error | A regular expression failed to compile or exceeded a match bound. |
+| `regex-backtracking` | error | A pattern contains nested quantifiers that may backtrack excessively. |
+| `archive-error` | error | A ZIP archive failed validation, extraction, or writing. |
+| `sqlite-error` | error | A SQLite connection, statement, transaction, or row limit failed. |
+| `http-error` | error | An HTTP request failed validation, transport, or a response bound. |
+| `process-error` | error | A subprocess failed to launch or exceeded an output bound. |
+| `timeout-error` | error | A network, process, or other blocking operation timed out. |
 | `runtime-error` | error | A fallback for runtime failures without a more specific code. |
 
 Runtime messages remain the authoritative detail. The code identifies the

@@ -362,6 +362,62 @@ _RUNTIME = (
         "remains the authoritative description.",
         "text output missing",
     ),
+    DiagnosticInfo(
+        "regex-error",
+        "error",
+        "Regular expression error",
+        "A regular expression could not be compiled or a pattern exceeded a "
+        "documented backtracking or match limit.",
+        'func call regex.compile "["',
+    ),
+    DiagnosticInfo(
+        "regex-backtracking",
+        "error",
+        "Unsafe regular expression",
+        "A regular expression contains nested quantifiers that may backtrack "
+        "excessively. Rewrite the pattern or pass allow_unsafe=true after "
+        "reviewing the input bounds.",
+        'func call regex.compile "(a+)+$"',
+    ),
+    DiagnosticInfo(
+        "archive-error",
+        "error",
+        "Archive error",
+        "A ZIP archive could not be read or written, or a member name or size "
+        "violated the archive safety rules.",
+        'func call archive.list "missing.zip"',
+    ),
+    DiagnosticInfo(
+        "sqlite-error",
+        "error",
+        "SQLite error",
+        "A SQLite connection, statement, transaction, or result limit failed.",
+        'func call sqlite.query database "SELECT * FROM missing"',
+    ),
+    DiagnosticInfo(
+        "http-error",
+        "error",
+        "HTTP client error",
+        "An HTTP request failed transport validation, timed out, or exceeded "
+        "the configured response limit.",
+        'func call http.request "not-a-url"',
+    ),
+    DiagnosticInfo(
+        "process-error",
+        "error",
+        "Process error",
+        "A subprocess could not be launched, timed out, or exceeded the "
+        "configured output limit.",
+        'func call process.run []',
+    ),
+    DiagnosticInfo(
+        "timeout-error",
+        "error",
+        "Operation timed out",
+        "A network, process, or other blocking operation exceeded its "
+        "configured timeout.",
+        'func call http.request "https://example.invalid"',
+    ),
 )
 
 DIAGNOSTICS: dict[str, DiagnosticInfo] = {
@@ -470,6 +526,9 @@ _LIMIT = re.compile(
 
 def code_for_runtime(error: BaseException) -> str:
     """Return the stable code for a runtime diagnostic."""
+    explicit_code = getattr(error, "code", None)
+    if isinstance(explicit_code, str) and explicit_code:
+        return explicit_code
     message = str(error)
     if isinstance(error, RecursionError):
         return "stack-overflow"

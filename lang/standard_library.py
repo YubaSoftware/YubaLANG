@@ -5,6 +5,7 @@ import binascii
 import collections as _collections
 import csv
 import datetime as datetime_module
+import glob as _glob
 import hashlib
 import io
 import json
@@ -12,7 +13,7 @@ import math
 import os
 import random
 import re
-import sqlite3
+import shutil
 import subprocess
 import sys as _sys
 import tempfile
@@ -23,6 +24,22 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
+
+from .error_values import StdLibError
+from .stdlib_extra import (
+    archive_functions,
+    decimal_functions,
+    env_functions,
+    glob_functions,
+    io_functions,
+    logging_functions,
+    regex_functions,
+    sqlite_functions,
+    statistics_functions,
+    tempfile_functions,
+    terminal_functions,
+    uuid_functions,
+)
 
 
 STANDARD_MODULES = frozenset(
@@ -41,9 +58,19 @@ STANDARD_MODULES = frozenset(
         "std.hash",
         "std.pathlib",
         "std.re",
-        "std.os",
-        "std.statistics",
+        "std.regex",
+        "std.glob",
+        "std.tempfile",
+        "std.archive",
         "std.sqlite",
+        "std.uuid",
+        "std.decimal",
+        "std.statistics",
+        "std.logging",
+        "std.terminal",
+        "std.env",
+        "std.io",
+        "std.os",
         "std.collections",
         "std.sys",
         "math",
@@ -60,6 +87,16 @@ STANDARD_MODULES = frozenset(
         "sqlite",
         "collections",
         "sys",
+        "regex",
+        "glob",
+        "tempfile",
+        "archive",
+        "uuid",
+        "decimal",
+        "logging",
+        "terminal",
+        "env",
+        "io",
     }
 )
 STANDARD_MODULE_ALIASES = {
@@ -78,6 +115,16 @@ STANDARD_MODULE_ALIASES = {
     "sqlite": "sqlite",
     "collections": "collections",
     "sys": "sys",
+    "regex": "regex",
+    "glob": "glob",
+    "tempfile": "tempfile",
+    "archive": "archive",
+    "uuid": "uuid",
+    "decimal": "decimal",
+    "logging": "logging",
+    "terminal": "terminal",
+    "env": "env",
+    "io": "io",
 }
 
 
@@ -240,14 +287,67 @@ def _filesystem_functions() -> dict[str, Callable[..., Any]]:
         Path(_string(path, "Path")).unlink()
         return None
 
+    def atomic_write_text(path: str, contents: str) -> None:
+        return write_data(
+            Path(_string(path, "Path")),
+            _string(contents, "Contents").encode("utf-8"),
+            True,
+        )
+
+    def atomic_write_bytes(path: str, contents: bytes | bytearray) -> None:
+        if not isinstance(contents, (bytes, bytearray)):
+            raise TypeError("Contents must be bytes or bytearray.")
+        return write_data(Path(_string(path, "Path")), bytes(contents), True)
+
+    def replace(source: str, destination: str) -> None:
+        os.replace(_string(source, "Source path"), _string(destination, "Destination path"))
+        return None
+
+    def is_dir(path: str) -> bool:
+        return Path(_string(path, "Path")).is_dir()
+
+    def size(path: str) -> int:
+        return Path(_string(path, "Path")).stat().st_size
+
+    def modified(path: str) -> float:
+        return Path(_string(path, "Path")).stat().st_mtime
+
+    def list_files(
+        path: str = ".",
+        pattern: str = "*",
+        recursive: bool = False,
+    ) -> list[str]:
+        root = Path(_string(path, "Path"))
+        if not isinstance(recursive, bool):
+            raise TypeError("recursive must be a boolean.")
+        matcher = _string(pattern, "Pattern")
+        if not root.is_dir():
+            raise ValueError(f"'{path}' is not a directory.")
+        iterator = root.rglob("*") if recursive else root.glob("*")
+        return sorted(
+            str(item) for item in iterator
+            if item.is_file() and item.match(matcher)
+        )
+
+    def expand(pattern: str) -> list[str]:
+        return sorted(_glob.glob(_string(pattern, "Pattern")))
+
     return {
         "read_text": read_text,
         "write_text": write_text,
         "read_bytes": read_bytes,
         "write_bytes": write_bytes,
+        "atomic_write_text": atomic_write_text,
+        "atomic_write_bytes": atomic_write_bytes,
+        "replace": replace,
         "exists": exists,
         "is_file": is_file,
+        "is_dir": is_dir,
+        "size": size,
+        "modified": modified,
         "list_dir": list_dir,
+        "list_files": list_files,
+        "expand": expand,
         "mkdir": mkdir,
         "remove_file": remove_file,
     }
@@ -631,13 +731,6 @@ def _collections_functions() -> dict[str, Callable[..., Any]]:
     return {"Counter": counter, "deque": deque, "defaultdict": defaultdict}
 
 
-def _sqlite_functions() -> dict[str, Callable[..., Any]]:
-    def connect(path: str, **kwargs: Any) -> sqlite3.Connection:
-        return sqlite3.connect(_string(path, "Database path"), **kwargs)
-
-    return {"connect": connect}
-
-
 def _datetime_functions() -> dict[str, Callable[..., Any]]:
     def now() -> float:
         return time.time()
@@ -739,58 +832,9 @@ def _re_functions() -> dict[str, Callable[..., Any]]:
     return {"search": search, "match": match, "findall": findall, "sub": sub}
 
 
-def _statistics_functions() -> dict[str, Callable[..., Any]]:
-    import statistics as _statistics
-
-    def mean(values: list[float]) -> float:
-        if not isinstance(values, (list, tuple)):
-            raise TypeError("mean() requires a list or tuple.")
-        return _statistics.mean(values)
-
-    def median(values: list[float]) -> float:
-        if not isinstance(values, (list, tuple)):
-            raise TypeError("median() requires a list or tuple.")
-        return _statistics.median(values)
-
-    def mode(values: list[float]) -> float | list[float]:
-        if not isinstance(values, (list, tuple)):
-            raise TypeError("mode() requires a list or tuple.")
-        return _statistics.mode(values)
-
-    def stdev(values: list[float]) -> float:
-        if not isinstance(values, (list, tuple)):
-            raise TypeError("stdev() requires a list or tuple.")
-        return _statistics.stdev(values)
-
-    def variance(values: list[float]) -> float:
-        if not isinstance(values, (list, tuple)):
-            raise TypeError("variance() requires a list or tuple.")
-        return _statistics.variance(values)
-
-    def correlation(left: list[float], right: list[float]) -> float:
-        if not isinstance(left, (list, tuple)) or not isinstance(right, (list, tuple)):
-            raise TypeError("correlation() requires two lists or tuples.")
-        return _statistics.correlation(left, right)
-
-    def percentile(values: list[float], point: float) -> float:
-        if not isinstance(values, (list, tuple)):
-            raise TypeError("percentile() requires a list or tuple.")
-        if isinstance(point, bool) or not isinstance(point, (int, float)):
-            raise TypeError("Point must be numeric.")
-        return _statistics.quantiles(values, n=100, method="linear")[int(point) - 1]
-
-    return {
-        "mean": mean,
-        "median": median,
-        "mode": mode,
-        "stdev": stdev,
-        "variance": variance,
-        "correlation": correlation,
-        "percentile": percentile,
-    }
-
-
-def _process_functions(program_args: list[str]) -> dict[str, Callable[..., Any]]:
+def _process_functions(
+    program_args: list[str], runtime: Any = None
+) -> dict[str, Callable[..., Any]]:
     def args() -> list[str]:
         return list(program_args)
 
@@ -806,8 +850,8 @@ def _process_functions(program_args: list[str]) -> dict[str, Callable[..., Any]]
 
     def run(
         arguments: list[str],
-        timeout: int | float = 30.0,
-        max_output_bytes: int = 1_048_576,
+        timeout: int | float | None = None,
+        max_output_bytes: int | None = None,
     ) -> dict[str, Any]:
         if (
             not isinstance(arguments, list)
@@ -815,11 +859,23 @@ def _process_functions(program_args: list[str]) -> dict[str, Callable[..., Any]]
             or any(not isinstance(item, str) for item in arguments)
         ):
             raise TypeError("Subprocess arguments must be a non-empty list of strings.")
-        duration = _finite_number(timeout, "Timeout")
-        if not 0 < duration <= 3600:
-            raise ValueError("Timeout must be greater than 0 and at most 3600 seconds.")
+        default_timeout = runtime.process_default_timeout if runtime else 30.0
+        maximum_timeout = runtime.process_max_timeout if runtime else 3600.0
+        default_limit = (
+            runtime.process_default_max_output_bytes if runtime else 1_048_576
+        )
+        maximum_limit = runtime.process_max_output_bytes if runtime else 67_108_864
+        duration = _finite_number(
+            default_timeout if timeout is None else timeout, "Timeout"
+        )
+        if not 0 < duration <= maximum_timeout:
+            raise ValueError(
+                f"Timeout must be greater than 0 and at most {maximum_timeout:g} seconds."
+            )
         output_limit = _positive_integer(
-            max_output_bytes, "Output limit", 67_108_864
+            default_limit if max_output_bytes is None else max_output_bytes,
+            "Output limit",
+            maximum_limit,
         )
         if any("\x00" in item for item in arguments):
             raise ValueError("Subprocess arguments must not contain NUL characters.")
@@ -889,8 +945,10 @@ def _process_functions(program_args: list[str]) -> dict[str, Callable[..., Any]]
         if reader_errors:
             raise OSError(f"Cannot capture subprocess output: {reader_errors[0]}") from reader_errors[0]
         if output_exceeded:
-            raise ValueError(
-                f"Subprocess output exceeded the {output_limit}-byte limit."
+            raise StdLibError(
+                "process",
+                f"Subprocess output exceeded the {output_limit}-byte limit.",
+                "process-error",
             )
         return {
             "exit_code": return_code,
@@ -952,14 +1010,14 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return redirected
 
 
-def _http_functions() -> dict[str, Callable[..., Any]]:
+def _http_functions(runtime: Any = None) -> dict[str, Callable[..., Any]]:
     def request(
         url: str,
         method: str = "GET",
         body: str | bytes | bytearray | None = None,
         headers: dict[str, str] | None = None,
-        timeout: int | float = 10.0,
-        max_bytes: int = 1_048_576,
+        timeout: int | float | None = None,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         address = _string(url, "URL")
         parsed = urllib.parse.urlsplit(address)
@@ -993,10 +1051,22 @@ def _http_functions() -> dict[str, Callable[..., Any]]:
                 request_headers[name] = value
         else:
             raise TypeError("HTTP headers must be a dictionary.")
-        duration = _finite_number(timeout, "Timeout")
-        if not 0 < duration <= 300:
-            raise ValueError("Timeout must be greater than 0 and at most 300 seconds.")
-        size_limit = _positive_integer(max_bytes, "Response limit", 67_108_864)
+        default_timeout = runtime.http_default_timeout if runtime else 10.0
+        maximum_timeout = runtime.http_max_timeout if runtime else 300.0
+        default_limit = runtime.http_default_max_bytes if runtime else 1_048_576
+        maximum_limit = runtime.http_max_bytes if runtime else 67_108_864
+        duration = _finite_number(
+            default_timeout if timeout is None else timeout, "Timeout"
+        )
+        if not 0 < duration <= maximum_timeout:
+            raise ValueError(
+                f"Timeout must be greater than 0 and at most {maximum_timeout:g} seconds."
+            )
+        size_limit = _positive_integer(
+            default_limit if max_bytes is None else max_bytes,
+            "Response limit",
+            maximum_limit,
+        )
         handler = _SafeRedirectHandler()
         opener = urllib.request.build_opener(handler)
         http_request = urllib.request.Request(
@@ -1006,6 +1076,16 @@ def _http_functions() -> dict[str, Callable[..., Any]]:
             response = opener.open(http_request, timeout=duration)
         except urllib.error.HTTPError as error:
             response = error
+        except TimeoutError as error:
+            raise StdLibError(
+                "timeout",
+                f"HTTP request exceeded its {duration:g}-second timeout.",
+                "timeout-error",
+            ) from error
+        except urllib.error.URLError as error:
+            raise StdLibError(
+                "http", f"HTTP request failed: {error.reason}", "http-error"
+            ) from error
         with response:
             chunks = bytearray()
             while True:
@@ -1014,8 +1094,10 @@ def _http_functions() -> dict[str, Callable[..., Any]]:
                     break
                 chunks.extend(chunk)
                 if len(chunks) > size_limit:
-                    raise ValueError(
-                        f"HTTP response exceeded the {size_limit}-byte limit."
+                    raise StdLibError(
+                        "http",
+                        f"HTTP response exceeded the {size_limit}-byte limit.",
+                        "http-error",
                     )
             return {
                 "status": response.status,
@@ -1026,11 +1108,88 @@ def _http_functions() -> dict[str, Callable[..., Any]]:
     return {"request": request}
 
 
+_INTEGER_LIMITS = {
+    "max_call_depth": (1, 100_000),
+    "max_collection_size": (1, 100_000_000),
+    "http_default_max_bytes": (1, 1_073_741_824),
+    "http_max_bytes": (1, 1_073_741_824),
+    "process_default_max_output_bytes": (1, 1_073_741_824),
+    "process_max_output_bytes": (1, 1_073_741_824),
+}
+_NUMBER_LIMITS = {
+    "http_default_timeout": (0.001, 86_400.0),
+    "http_max_timeout": (0.001, 86_400.0),
+    "process_default_timeout": (0.001, 86_400.0),
+    "process_max_timeout": (0.001, 86_400.0),
+}
+_DEFAULT_AT_MOST_MAXIMUM = {
+    "http_default_timeout": "http_max_timeout",
+    "http_default_max_bytes": "http_max_bytes",
+    "process_default_timeout": "process_max_timeout",
+    "process_default_max_output_bytes": "process_max_output_bytes",
+}
+_MAXIMUM_AT_LEAST_DEFAULT = {value: key for key, value in _DEFAULT_AT_MOST_MAXIMUM.items()}
+
+
+def _system_functions(
+    program_args: list[str], runtime: Any = None
+) -> dict[str, Callable[..., Any]]:
+    def limits() -> dict[str, Any]:
+        return runtime.limits() if runtime is not None else {}
+
+    def set_limit(name: str, value: Any) -> dict[str, Any]:
+        if runtime is None:
+            raise RuntimeError("Runtime limits are not available.")
+        key = _string(name, "Limit name")
+        current = runtime.limits()
+        if key not in current:
+            raise ValueError(
+                "Unknown limit '" + key + "'. Known limits: "
+                + ", ".join(sorted(current)) + "."
+            )
+        if isinstance(value, bool):
+            raise TypeError(f"Limit '{key}' must be a number.")
+        if key in _INTEGER_LIMITS:
+            minimum, maximum = _INTEGER_LIMITS[key]
+            if not isinstance(value, int) or not minimum <= value <= maximum:
+                raise ValueError(
+                    f"Limit '{key}' must be an integer between {minimum} and {maximum}."
+                )
+        else:
+            minimum, maximum = _NUMBER_LIMITS[key]
+            if not isinstance(value, (int, float)) or not minimum <= value <= maximum:
+                raise ValueError(
+                    f"Limit '{key}' must be between {minimum:g} and {maximum:g}."
+                )
+        if key in _DEFAULT_AT_MOST_MAXIMUM and value > current[_DEFAULT_AT_MOST_MAXIMUM[key]]:
+            raise ValueError(
+                f"Limit '{key}' must not exceed "
+                f"'{_DEFAULT_AT_MOST_MAXIMUM[key]}'."
+            )
+        if key in _MAXIMUM_AT_LEAST_DEFAULT and value < current[_MAXIMUM_AT_LEAST_DEFAULT[key]]:
+            raise ValueError(
+                f"Limit '{key}' must be at least "
+                f"'{_MAXIMUM_AT_LEAST_DEFAULT[key]}'."
+            )
+        setattr(runtime, key, value)
+        return runtime.limits()
+
+    return {
+        "argv": lambda: list(program_args),
+        "platform": _sys.platform,
+        "version": _sys.version,
+        "limits": limits,
+        "set_limit": set_limit,
+        "exit": lambda code=0: (_ for _ in ()).throw(SystemExit(code)),
+    }
+
+
 def standard_module_functions(
     name: str,
     clock: Callable[[], float],
     random_source: random.Random,
     program_args: list[str],
+    runtime: Any = None,
 ) -> dict[str, Callable[..., Any]]:
     canonical_name = {
         "math": "math",
@@ -1048,6 +1207,16 @@ def standard_module_functions(
         "sqlite": "sqlite",
         "collections": "collections",
         "sys": "sys",
+        "regex": "regex",
+        "glob": "glob",
+        "tempfile": "tempfile",
+        "archive": "archive",
+        "uuid": "uuid",
+        "decimal": "decimal",
+        "logging": "logging",
+        "terminal": "terminal",
+        "env": "env",
+        "io": "io",
     }.get(name, name)
     modules: dict[str, Callable[[], dict[str, Callable[..., Any]]]] = {
         "std.path": _path_functions,
@@ -1057,13 +1226,24 @@ def standard_module_functions(
         "std.math": _math_functions,
         "std.json": _json_functions,
         "std.encoding": _encoding_functions,
-        "std.process": lambda: _process_functions(program_args),
-        "std.http": _http_functions,
+        "std.process": lambda: _process_functions(program_args, runtime),
+        "std.http": lambda: _http_functions(runtime),
         "std.csv": _csv_functions,
         "std.url": _url_functions,
         "std.hash": _hash_functions,
         "std.pathlib": _pathlib_functions,
         "std.re": _re_functions,
+        "std.regex": regex_functions,
+        "std.glob": glob_functions,
+        "std.tempfile": lambda: tempfile_functions(runtime),
+        "std.archive": lambda: archive_functions(runtime),
+        "std.sqlite": lambda: sqlite_functions(runtime),
+        "std.uuid": uuid_functions,
+        "std.decimal": decimal_functions,
+        "std.logging": lambda: logging_functions(runtime),
+        "std.terminal": terminal_functions,
+        "std.env": lambda: env_functions(program_args),
+        "std.io": io_functions,
         "std.os": lambda: {
             "getenv": lambda key, default=None: os.environ.get(_string(key, "Environment variable name"), default),
             "environ": dict(os.environ),
@@ -1071,15 +1251,9 @@ def standard_module_functions(
             "listdir": lambda path: sorted(os.listdir(_string(path, "Path"))),
             "mkdir": lambda path, parents=False: os.makedirs(_string(path, "Path"), exist_ok=parents),
         },
-        "std.statistics": _statistics_functions,
-        "std.sqlite": _sqlite_functions,
+        "std.statistics": statistics_functions,
         "std.collections": _collections_functions,
-        "std.sys": lambda: {
-            "argv": lambda: list(program_args),
-            "platform": _sys.platform,
-            "version": _sys.version,
-            "exit": lambda code=0: (_ for _ in ()).throw(SystemExit(code)),
-        },
+        "std.sys": lambda: _system_functions(program_args, runtime),
         "math": _math_functions,
         "random": lambda: _random_functions(random_source),
         "datetime": _datetime_functions,
@@ -1098,17 +1272,22 @@ def standard_module_functions(
             "encode": base64.b64encode,
             "decode": base64.b64decode,
         },
-        "subprocess": lambda: _process_functions(program_args),
+        "subprocess": lambda: _process_functions(program_args, runtime),
         "csv": _csv_functions,
-        "statistics": _statistics_functions,
-        "sqlite": _sqlite_functions,
+        "statistics": statistics_functions,
+        "sqlite": lambda: sqlite_functions(runtime),
         "collections": _collections_functions,
-        "sys": lambda: {
-            "argv": lambda: list(program_args),
-            "platform": _sys.platform,
-            "version": _sys.version,
-            "exit": lambda code=0: (_ for _ in ()).throw(SystemExit(code)),
-        },
+        "regex": regex_functions,
+        "glob": glob_functions,
+        "tempfile": lambda: tempfile_functions(runtime),
+        "archive": lambda: archive_functions(runtime),
+        "uuid": uuid_functions,
+        "decimal": decimal_functions,
+        "logging": lambda: logging_functions(runtime),
+        "terminal": terminal_functions,
+        "env": lambda: env_functions(program_args),
+        "io": io_functions,
+        "sys": lambda: _system_functions(program_args, runtime),
     }
     if canonical_name not in modules:
         raise KeyError(f"Unknown standard module '{name}'.")

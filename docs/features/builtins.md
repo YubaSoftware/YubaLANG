@@ -92,12 +92,23 @@ The interpreter also supports `all`, `any`, `bool`, `callable`, `id`, `len`,
 use `arith <operation> <value>` or `arith <operation> <value1> <value2>`.
 
 `open <path> <mode> <file_variable>` opens a text or binary file.
-`file read <file_variable> <destination>` reads the remaining content:
-text-mode files require a `string` destination, binary-mode files require
-`bytes` or `bytearray`. `file write <file_variable> <value>` writes a string
-to a text file or bytes/bytearray to a binary file. Use
-`close <file_variable>` for deterministic closure; remaining open files are
-also closed through the runtime resource protocol when a file run finishes.
+`file read <file_variable> [count] <destination>` reads the remaining content
+or at most `count` characters/bytes: text-mode files require a `string`
+destination, binary-mode files require `bytes` or `bytearray`.
+`file readline <file_variable> <destination>` reads one line, and
+`file readlines <file_variable> <list_destination>` reads all remaining lines.
+`file write <file_variable> <value>` writes a string to a text file or
+bytes/bytearray to a binary file; `file writelines <file_variable> <list>`
+writes each element. `file seek <file_variable> <offset> [whence]` and
+`file tell <file_variable> <int_destination>` position a seekable file;
+`whence` is 0 (start), 1 (current), or 2 (end). `file flush` and
+`file truncate <file_variable> [size]` expose buffered flushing and truncation.
+Use `iter <file_variable> <iterator_destination>` for line iteration and
+`close <file_or_iterator>` for deterministic closure; use the standard-library
+close functions for archive, SQLite, and logging handles. Remaining open files,
+file iterators, and the resources behind standard-library handles are also
+closed through the runtime resource protocol when a file run finishes.
+`std.io` provides binary standard input and output streams.
 
 Commands that write to a destination variable check the result against that
 variable's declared type. An integer result may be widened to a `float`
@@ -111,10 +122,11 @@ JSON, encoding, process, and HTTP APIs. They are imported and called with
 [standard-library reference](standard-library.md) for their signatures and
 security limits.
 
-Collections have no YubaLANG-specific size cap; their practical limits depend
-on available host memory. If allocation raises `MemoryError`, execution
-reports it as a source-located runtime diagnostic rather than exposing a
-Python traceback.
+Collections are capped by the configurable `max_collection_size` runtime limit
+(1,000,000 entries by default). The check applies when a value is assigned or
+mutated; nested collections are checked as they are assigned. If allocation
+still raises `MemoryError`, execution reports it as a source-located runtime
+diagnostic rather than exposing a Python traceback.
 
 ## Type annotations
 
@@ -174,13 +186,23 @@ func call require_positive 5 -> result
 
 Use `throw <value>` with `try`, optional `catch [name]`, and optional
 `finally` / `endtry` blocks for structured error handling. A named catch
-variable contains the thrown value or, for a runtime error, its message string.
-`finally` runs even when a function returns from inside the protected block.
-Uncaught errors retain their source location and function call frames.
+variable contains a dictionary with `kind`, `message`, `code`, `cause`,
+`stack`, and `value`; its string form is the human-readable message, so
+`text output problem` keeps working. Use `catch <kind> as <variable>` to handle
+one kind, or `catch` with no name to handle any error. `finally` runs even when
+a function returns from inside the protected block. Uncaught errors retain
+their source location and function call frames.
 
-User-defined functions may be nested up to 128 calls deep. Exceeding this
-limit reports a source-located recursion error instead of exposing an
-interpreter traceback.
+`error <kind> <message> <dict_destination> [cause]` constructs an error value
+without throwing it. `kind` may be an identifier or string; the message must be
+a string. The destination must be a dictionary variable. `cause` may be another
+error value, allowing wrappers without exposing host exception objects.
+
+User-defined functions may be nested up to the configurable
+`max_call_depth` (128 by default). Exceeding this limit reports a
+source-located recursion error instead of exposing an interpreter traceback.
+HTTP and subprocess timeouts and output bounds are configurable through the
+runtime limits described in the standard-library reference.
 
 ## Records
 

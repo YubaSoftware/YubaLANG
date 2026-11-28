@@ -28,6 +28,7 @@ _COMMANDS = {
     "range", "record", "repr",
     "return", "reversed", "set", "setattr", "slice", "sorted", "text",
     "throw", "try", "catch", "finally", "endtry", "tuple", "type", "vars",
+    "error",
     "wait", "zip", "enum", "match", "case", "endmatch",
 }
 _ARITY: dict[str, tuple[int, ...]] = {
@@ -290,14 +291,26 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
             if not blocks or blocks[-1][0] != "try":
                 error = f"Unexpected '{command}' without an open try block."
             elif command == "catch" and (
-                len(parts) not in (1, 2)
+                len(parts) not in (1, 2, 4)
                 or (len(parts) == 2 and not _IDENTIFIER.fullmatch(parts[1]))
+                or (
+                    len(parts) == 4
+                    and (
+                        parts[2] != "as"
+                        or not _IDENTIFIER.fullmatch(parts[1])
+                        or not _IDENTIFIER.fullmatch(parts[3])
+                    )
+                )
             ):
-                error = "Usage: catch [exception_variable]"
+                error = "Usage: catch [exception_variable] or catch <kind> as <variable>"
             elif command == "finally" and len(parts) != 1:
                 error = "Usage: finally"
         elif command == "throw" and len(parts) != 2:
             error = "Usage: throw <value>"
+        elif command == "error" and len(parts) not in (4, 5):
+            error = (
+                "Usage: error <kind> <message> <dict_destination> [cause]"
+            )
         elif command == "if":
             if len(parts) < 2:
                 error = "Usage: if <condition>"
@@ -480,13 +493,28 @@ def analyze_document(source: str, strict: bool = False) -> list[dict[str, Any]]:
             error = "Usage: assert <boolean> [message]"
         elif command == "close" and len(parts) != 2:
             error = "Usage: close <file_variable>"
-        elif command == "file" and (
-            len(parts) != 4 or parts[1] not in ("read", "write")
-        ):
-            error = (
-                "Usage: file read <file_variable> <destination> or "
-                "file write <file_variable> <value>"
-            )
+        elif command == "file":
+            if len(parts) < 3:
+                error = "Usage: file <operation> <file_variable> [arguments]"
+            elif parts[1] == "read" and len(parts) not in (4, 5):
+                error = "Usage: file read <file_variable> [count] <destination>"
+            elif parts[1] == "write" and len(parts) != 4:
+                error = "Usage: file write <file_variable> <value>"
+            elif parts[1] in ("readline", "readlines", "tell") and len(parts) != 4:
+                error = f"Usage: file {parts[1]} <file_variable> <destination>"
+            elif parts[1] == "writelines" and len(parts) != 4:
+                error = "Usage: file writelines <file_variable> <list>"
+            elif parts[1] == "seek" and len(parts) not in (4, 5):
+                error = "Usage: file seek <file_variable> <offset> [whence]"
+            elif parts[1] == "flush" and len(parts) != 3:
+                error = "Usage: file flush <file_variable>"
+            elif parts[1] == "truncate" and len(parts) not in (3, 4):
+                error = "Usage: file truncate <file_variable> [size]"
+            elif parts[1] not in (
+                "read", "write", "readline", "readlines", "writelines",
+                "seek", "tell", "flush", "truncate",
+            ):
+                error = "Invalid file operation or arguments."
         elif command == "record":
             if len(parts) < 3 or parts[1] not in ("define", "create"):
                 error = (

@@ -436,6 +436,8 @@ def execute_command(
         if len(parts) != 3:
             raise SyntaxError("Usage: iter <iterable> <dest_iterator_var>")
         iterator_value = iter(resolve(parts[1], runtime))
+        if hasattr(iterator_value, "close"):
+            runtime.register_resource(iterator_value)
         if runtime.get_var(parts[2]) is None:
             runtime.define_var(parts[2], "iterator", iterator_value)
         else:

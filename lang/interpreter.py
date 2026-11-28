@@ -24,8 +24,8 @@ from .patterns import (
     parse_pattern,
     unpack_pattern,
 )
+from .error_values import error_value_for, kind_matches
 from .runtime import (
-    MAX_FUNCTION_CALL_DEPTH,
     LanguageException,
     RecordValue,
     Runtime,
@@ -129,9 +129,9 @@ def _invoke_function(
     native_function = runtime.native_functions.get(resolved_name)
     if native_function is not None:
         return native_function(*arguments, **(keyword_arguments or {}))
-    if runtime.function_call_depth >= MAX_FUNCTION_CALL_DEPTH:
+    if runtime.function_call_depth >= runtime.max_call_depth:
         raise RecursionError(
-            f"Maximum function call depth ({MAX_FUNCTION_CALL_DEPTH}) exceeded."
+            f"Maximum function call depth ({runtime.max_call_depth}) exceeded."
         )
     function = runtime.get_function(resolved_name)
     if function is None:
@@ -387,6 +387,7 @@ def _execute_import(parts: list[str], runtime: Runtime, source_name: str) -> Non
                     runtime.clock,
                     runtime.random_source,
                     runtime.program_args,
+                    runtime,
                 ).items()
             }
         )
@@ -422,6 +423,7 @@ def _execute_try_block(
         "try": ([], []), "catch": ([], []), "finally": ([], [])
     }
     catch_name: str | None = None
+    catch_kind: str | None = None
     has_catch = False
     section = "try"
     depth = 1
@@ -440,11 +442,27 @@ def _execute_try_block(
             if depth == 0:
                 break
         elif depth == 1 and command == "catch":
-            if section != "try" or len(parts) not in (1, 2):
-                raise SyntaxError("Usage: catch [exception_variable], before finally.")
-            if len(parts) == 2 and not parts[1].isidentifier():
-                raise SyntaxError("Catch variable must be an identifier.")
-            catch_name = parts[1] if len(parts) == 2 else None
+            if section != "try":
+                raise SyntaxError("Usage: catch [variable], before finally.")
+            if len(parts) == 1:
+                catch_name = None
+                catch_kind = None
+            elif len(parts) == 2:
+                if not parts[1].isidentifier():
+                    raise SyntaxError("Catch variable must be an identifier.")
+                catch_name = parts[1]
+                catch_kind = None
+            elif len(parts) == 4 and parts[2] == "as":
+                if not parts[1].isidentifier() or not parts[3].isidentifier():
+                    raise SyntaxError(
+                        "Usage: catch <kind> as <variable>, before finally."
+                    )
+                catch_kind = parts[1]
+                catch_name = parts[3]
+            else:
+                raise SyntaxError(
+                    "Usage: catch [variable] or catch <kind> as <variable>."
+                )
             has_catch = True
             section = "catch"
             index += 1
@@ -477,7 +495,16 @@ def _execute_try_block(
             runtime.exception_capture_depth -= 1
 
         if signal is not None:
-            if not has_catch:
+            caught_value = error_value_for(
+                signal.error,
+                runtime,
+                signal.source_name,
+                signal.line_number,
+            )
+            matches = catch_kind is None or kind_matches(
+                caught_value.kind, catch_kind
+            )
+            if not has_catch or not matches:
                 if runtime.exception_capture_depth == 0:
                     print(format_diagnostic(
                         signal.error, signal.source_name, signal.line_number,
@@ -485,16 +512,9 @@ def _execute_try_block(
                     ))
                     raise SystemExit(1) from signal.error
                 raise signal
-            caught_value = (
-                signal.error.value
-                if isinstance(signal.error, LanguageException)
-                else str(signal.error)
-            )
             with runtime.scope():
-                if catch_name is not None:
-                    runtime.define_var(
-                        catch_name, _type_of(caught_value), caught_value
-                    )
+                if catch_name is not None and catch_name != "_":
+                    runtime.define_var(catch_name, "dict", caught_value)
                 execute_lines(
                     sections["catch"][0], runtime, source_name,
                     sections["catch"][1], namespace,
@@ -667,6 +687,41 @@ def execute_lines(
                 if len(parts) != 2:
                     raise SyntaxError("Usage: throw <value>")
                 raise LanguageException(resolve(parts[1], runtime))
+
+            if command == "error":
+                if len(parts) not in (4, 5):
+                    raise SyntaxError(
+                        "Usage: error <kind> <message> <dict_destination> "
+                        "[cause]"
+                    )
+                from .error_values import ErrorValue
+
+                kind_token = parts[1]
+                quoted_kind = (
+                    len(kind_token) >= 2
+                    and kind_token[0] == kind_token[-1]
+                    and kind_token[0] in ("'", '"')
+                )
+                kind = resolve(kind_token, runtime) if quoted_kind else kind_token
+                message = resolve(parts[2], runtime)
+                if not isinstance(kind, str) or not kind.isidentifier():
+                    raise ValueError("Error kind must be an identifier or string.")
+                if not isinstance(message, str):
+                    raise TypeError("Error message must be a string.")
+                destination = parts[3]
+                cause = resolve(parts[4], runtime) if len(parts) == 5 else None
+                value = ErrorValue(kind, message, cause=cause)
+                existing = runtime.get_var(destination)
+                if existing is None:
+                    runtime.define_var(destination, "dict", value)
+                elif existing["type"] == "dict":
+                    runtime.assign_var(destination, value)
+                else:
+                    raise TypeError(
+                        f"Variable '{destination}' must be a dictionary."
+                    )
+                index += 1
+                continue
 
             if command == "try":
                 if len(parts) != 1:

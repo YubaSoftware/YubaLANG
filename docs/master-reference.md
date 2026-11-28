@@ -375,12 +375,20 @@ given key; record attribute names may be unquoted.
 - `wait <seconds>` pauses for the specified duration.
 - `open <path> <mode> <file-destination>` opens a file. Text files use UTF-8;
   modes containing `b` open binary files.
-- `file read <file-variable> <destination>` reads the rest of an open file.
-  Text mode requires a `string` destination; binary mode requires `bytes` or
-  `bytearray`.
+- `file read <file-variable> [count] <destination>` reads the rest of an open
+  file or at most `count` characters/bytes. Text mode requires a `string`
+  destination; binary mode requires `bytes` or `bytearray`.
+- `file readline <file-variable> <destination>` and
+  `file readlines <file-variable> <list-destination>` read one or all remaining
+  lines.
 - `file write <file-variable> <value>` writes a string to a text file or
-  bytes/bytearray to a binary file.
-- `close <file-variable>` closes an open file.
+  bytes/bytearray to a binary file; `file writelines <file-variable> <list>`
+  writes each element.
+- `file seek <file-variable> <offset> [whence]`, `file tell <file-variable>
+  <int-destination>`, `file flush <file-variable>`, and
+  `file truncate <file-variable> [size]` position and manage a seekable file.
+- `iter <file-variable> <iterator-destination>` iterates lines.
+- `close <file-variable>` closes an open file or handle.
 
 Built-in unary functions accepted by `map` and `filter` include `abs`, `bool`,
 `chr`, `int`, `float`, `str`, `ord`, `round`, `ascii`, `repr`, and `len`.
@@ -576,24 +584,34 @@ finally
 endtry
 ```
 
-`catch` and `finally` are optional. A named catch variable receives the thrown
-value, or the runtime error message as a string. `finally` runs when control
-leaves the protected block, including when a function returns. Catch blocks
-handle language/runtime errors, not Python implementation defects.
+`catch` and `finally` are optional. A named catch variable receives a
+dictionary with `kind`, `message`, `code`, `cause`, `stack`, and `value`; its
+string form is the human-readable message, so `text output problem` keeps
+working. Use `catch <kind> as <variable>` to handle one kind, or `catch` with no
+name to handle any error; a non-matching kind rethrows. `finally` runs when
+control leaves the protected block, including when a function returns. Catch
+blocks handle language/runtime errors, not Python implementation defects.
+`error <kind> <message> <dict-destination> [cause]` constructs an error value
+explicitly. The `stack` field is plain data and never exposes a Python
+traceback.
 
-Files opened with `open` are tracked by the runtime and closed at the end of
-file execution, including those opened in function-local scopes. Use `close`
-for deterministic early closure. Cleanup runs in reverse registration order,
-attempts every resource even when one `close()` fails, and raises the first
-failure after all cleanup has been attempted. Hosts can track any object with a
-`close()` method through `Runtime.register_resource`, `close_resource`, and
-`close_resources`; see
+Files opened with `open`, file iterators, and native standard-library handles
+are tracked by the runtime and closed at the end of file execution, including
+those opened in function-local scopes. Use `close` for deterministic early
+closure. Cleanup runs in reverse registration order, attempts every resource
+even when one `close()` fails, and raises the first failure after all cleanup
+has been attempted. Hosts can track any object with a `close()` method through
+`Runtime.register_resource`, `close_resource`, and `close_resources`; see
 [resource lifecycle](1.4-docs.md#resource-lifecycle). Closing an already closed
 resource is a no-op.
 
-User-defined function calls are limited to 128 nested calls. Host memory
-exhaustion is reported as a source diagnostic with a sizing hint; collections
-have no separate language-defined size cap.
+Function calls are limited to a configurable `max_call_depth` (128 by default).
+Collections are capped by `max_collection_size` (1,000,000 entries by default);
+the check applies when a value is assigned or mutated. HTTP timeouts and
+response sizes and subprocess timeouts and output sizes also have configurable
+defaults and maxima. Hosts set them through `Runtime(...)`; programs can read
+or update them with `std.sys.limits()` and `std.sys.set_limit(name, value)`.
+Host memory exhaustion is reported as a source diagnostic with a sizing hint.
 
 ## Modules and packages
 
@@ -648,8 +666,10 @@ details.
 
 The bundled runtime provides the reserved `std.*` modules: `std.path`,
 `std.fs`, `std.time`, `std.random`, `std.math`, `std.json`, `std.encoding`,
-`std.process`, `std.http`, `std.csv`, `std.url`, and `std.hash`. Import a
-module and call its functions with
+`std.process`, `std.http`, `std.csv`, `std.url`, `std.hash`, `std.regex`,
+`std.glob`, `std.tempfile`, `std.archive`, `std.sqlite`, `std.uuid`,
+`std.decimal`, `std.statistics`, `std.logging`, `std.terminal`, `std.env`,
+`std.io`, and `std.sys`. Import a module and call its functions with
 `func call namespace.function`; see the
 [standard-library reference](features/standard-library.md) for APIs, limits, and
 security behavior. Bundled modules do not appear in manifests or lockfiles and
@@ -664,7 +684,14 @@ timeouts. All these APIs are synchronous; asynchronous I/O is deferred until
 the language defines concurrency and cancellation semantics.
 CSV parsing/formatting, URL and query-string helpers, and SHA-256 text, byte,
 and file utilities are also available through `std.csv`, `std.url`, and
-`std.hash`.
+`std.hash`. `std.regex` and `std.glob` cover pattern matching and path
+expansion; `std.tempfile` and `std.archive` cover temporary resources and ZIP
+files; `std.sqlite` provides parameter binding and transactions; `std.uuid` and
+`std.decimal` provide identifiers and exact decimal arithmetic;
+`std.statistics` summarizes numeric data; `std.logging`, `std.terminal`,
+`std.env`, and `std.io` cover diagnostics, ANSI styling, environment access, and
+standard streams. `std.sys` reports and updates runtime limits. Resource-backed
+handles use the same deterministic cleanup protocol as files.
 
 ## Developer tools
 
@@ -785,9 +812,13 @@ trusted libraries. See the [C ABI guide](features/c-abi.md).
   subject to runtime checks.
 - There is no bytecode compiler, project build command, user-defined generics,
   record methods or inheritance, generators, or asynchronous runtime.
-- Resources registered with the runtime are closed deterministically in reverse
-  order; resource-backed iterators and native handles do not yet have a
-  language-level protocol.
+- Resources registered with the runtime, including file iterators and the
+  resources behind standard-library handles, are closed deterministically in
+  reverse order. Use `close` for a file or iterator and the module's close
+  function for archive, SQLite, and logging handles; repeated close is a no-op.
+- Dictionaries preserve insertion order; sets do not promise iteration order.
+  Sorted standard-library results are stable and locale-independent. Raw hash
+  values and `id()` values are not stable across runs.
 - The C bridge is intentionally narrow and does not transfer pointers or
   ownership.
 

@@ -17,7 +17,7 @@ _IMPORT_NOT_FOUND = re.compile(r"Module '([^']+)' was not found;")
 _COMMANDS = {
     "all", "any", "arith", "ascii", "assert", "bool", "break", "bytearray", "bytes",
     "callable", "chr", "close", "compare", "continue", "convert", "define", "dict",
-    "enumerate", "ffi", "filter", "format", "func", "getattr", "hasattr", "id",
+    "enumerate", "error", "ffi", "filter", "format", "func", "getattr", "hasattr", "id",
     "if", "import", "iter", "len", "list", "loop", "map", "next", "open", "ord",
     "range", "record", "repr", "return", "reversed", "set", "setattr", "slice",
     "sorted", "text", "throw", "try", "catch", "finally", "endtry", "tuple",
